@@ -80,7 +80,7 @@ npx -y @wecom/wecom-openclaw-cli --help
 ### Manual Install
 
 ```shell
-openclaw plugins install @wecom/wecom-openclaw-plugin
+openclaw plugins install @wecom/wecom-openclaw-plugin-fork
 ```
 
 ### Configuration
@@ -368,7 +368,8 @@ Dynamic Agent routing automatically creates isolated agents per user or group, e
         "enabled": true,
         "dmCreateAgent": true,
         "groupEnabled": true,
-        "adminUsers": ["admin_user_id"]
+        "adminUsers": ["admin_user_id"],
+        "workspaceSeed": true
       }
     }
   }
@@ -381,6 +382,7 @@ Dynamic Agent routing automatically creates isolated agents per user or group, e
 | `channels.wecom.dynamicAgents.dmCreateAgent` | Create isolated agent per DM user | `true` |
 | `channels.wecom.dynamicAgents.groupEnabled` | Enable dynamic agent for group chats | `true` |
 | `channels.wecom.dynamicAgents.adminUsers` | Admin users (bypass dynamic routing, use main agent) | `[]` |
+| `channels.wecom.dynamicAgents.workspaceSeed` | Seed workspace files and enable skills watcher for dynamic agents | `false` |
 
 ---
 

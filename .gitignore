@@ -25,5 +25,6 @@ yarn-error.log
 # 测试生成的媒体文件
 test-media-files
 .codebuddy
+.claude
 
 requirements

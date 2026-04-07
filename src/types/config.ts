@@ -96,4 +96,6 @@ export type WecomDynamicAgentsConfig = {
     groupEnabled?: boolean;
     /** 管理员列表（绕过动态路由，使用主 Agent） */
     adminUsers?: string[];
+    /** 是否在命中动态 Agent 时执行 workspace seed 与 skills watcher */
+    workspaceSeed?: boolean;
 };

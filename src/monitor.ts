@@ -18,6 +18,9 @@
 
 import * as os from "os";
 import * as path from "path";
+import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import * as fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { WSClient, generateReqId, WSAuthFailureError, WSReconnectExhaustedError } from "@wecom/aibot-node-sdk";
@@ -25,6 +28,12 @@ import type { WsFrame, Logger } from "@wecom/aibot-node-sdk";
 import { getWeComRuntime } from "./runtime.js";
 import { getDefaultMediaLocalRoots, resolveStateDir } from "./openclaw-compat.js";
 import type { ResolvedWeComAccount, WeComConfig } from "./utils.js";
+import {
+  buildDynamicAgentInboundBody,
+  ensureDynamicAgentWorkspace,
+  getDynamicAgentConfig,
+  resolveAgentWorkspaceDir,
+} from "./dynamic-agent.js";
 import {
   CHANNEL_ID,
   THINKING_MESSAGE,
@@ -134,6 +143,121 @@ async function getExtendedMediaLocalRoots(config?: WeComConfig): Promise<string[
 }
 
 // ============================================================================
+// 入站媒体重定位到 Agent Workspace
+// ============================================================================
+
+const MAX_INBOUND_MEDIA_NAME_ATTEMPTS = 1000;
+const MAX_INBOUND_MEDIA_UUID_FALLBACK_ATTEMPTS = 5;
+
+function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+  const relative = path.relative(rootPath, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function resolveRealPathOrAbsolute(targetPath: string): Promise<string> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+function buildWorkspaceInboundCandidate(parsed: path.ParsedPath, suffix: number): string {
+  if (suffix === 0) {
+    return parsed.base || "attachment";
+  }
+  return `${parsed.name || "attachment"}-${suffix}${parsed.ext}`;
+}
+
+async function copyInboundMediaToWorkspace(params: {
+  sourcePath: string;
+  workspaceDir: string;
+}): Promise<string> {
+  const inboundDir = path.join(params.workspaceDir, "media", "inbound");
+  await fs.mkdir(inboundDir, { recursive: true });
+
+  const parsed = path.parse(path.basename(params.sourcePath));
+  for (let suffix = 0; suffix < MAX_INBOUND_MEDIA_NAME_ATTEMPTS; suffix += 1) {
+    const candidate = buildWorkspaceInboundCandidate(parsed, suffix);
+    const destPath = path.join(inboundDir, candidate);
+    try {
+      await fs.copyFile(params.sourcePath, destPath, fsConstants.COPYFILE_EXCL);
+      return destPath;
+    } catch (err: any) {
+      if (err?.code === "EEXIST") {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  for (let i = 0; i < MAX_INBOUND_MEDIA_UUID_FALLBACK_ATTEMPTS; i += 1) {
+    const fallbackName = `${parsed.name || "attachment"}-${randomUUID()}${parsed.ext}`;
+    const destPath = path.join(inboundDir, fallbackName);
+    try {
+      await fs.copyFile(params.sourcePath, destPath, fsConstants.COPYFILE_EXCL);
+      return destPath;
+    } catch (err: any) {
+      if (err?.code === "EEXIST") {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(
+    `Failed to allocate a unique inbound media filename after ${
+      MAX_INBOUND_MEDIA_NAME_ATTEMPTS + MAX_INBOUND_MEDIA_UUID_FALLBACK_ATTEMPTS
+    } attempts`,
+  );
+}
+
+async function relocateInboundMediaToAgentWorkspace(params: {
+  core: ReturnType<typeof getWeComRuntime>;
+  config: OpenClawConfig;
+  runtime?: RuntimeEnv;
+  agentId: string;
+  mediaList: Array<{ path: string; contentType?: string }>;
+}): Promise<Array<{ path: string; contentType?: string }>> {
+  if (params.mediaList.length === 0) {
+    return params.mediaList;
+  }
+
+  const workspaceDir = resolveAgentWorkspaceDir(params.core, params.config, params.agentId);
+  const workspaceRealPath = await resolveRealPathOrAbsolute(workspaceDir);
+  const relocated: Array<{ path: string; contentType?: string }> = [];
+
+  for (const media of params.mediaList) {
+    const sourcePath = path.resolve(media.path);
+    const sourceRealPath = await resolveRealPathOrAbsolute(sourcePath);
+    if (isPathWithinRoot(sourceRealPath, workspaceRealPath)) {
+      relocated.push(media);
+      continue;
+    }
+    try {
+      const stagedPath = await copyInboundMediaToWorkspace({
+        sourcePath,
+        workspaceDir,
+      });
+      params.runtime?.log?.(
+        `[wecom][inbound-media] relocated to workspace: ${sourcePath} -> ${stagedPath} (agent=${params.agentId})`,
+      );
+      relocated.push({
+        ...media,
+        path: stagedPath,
+      });
+    } catch (err) {
+      params.runtime?.error?.(
+        `[wecom][inbound-media] failed to relocate ${sourcePath} into workspace for agent=${params.agentId}: ${String(err)}`,
+      );
+      relocated.push(media);
+    }
+  }
+
+  return relocated;
+}
+
+// ============================================================================
 // 媒体发送错误提示
 // ============================================================================
 
@@ -180,7 +304,7 @@ export { sendWeComReply } from "./message-sender.js";
  * 构建消息上下文
  * @returns 消息上下文对象
  */
-function buildMessageContext(
+async function buildMessageContext(
   frame: WsFrame,
   account: ResolvedWeComAccount,
   config: OpenClawConfig,
@@ -220,22 +344,48 @@ function buildMessageContext(
 
   // 应用动态路由结果
   if (routingResult.routeModified) {
+    const dynamicConfig = getDynamicAgentConfig(config);
+    if (dynamicConfig.workspaceSeed) {
+      ensureDynamicAgentWorkspace({
+        dynamicAgentId: routingResult.finalAgentId,
+        sourceAgentId: route.agentId,
+        config,
+        runtime: core,
+        log: runtime?.log ? (...args: any[]) => runtime.log?.(...args) : undefined,
+        error: runtime?.error ? (...args: any[]) => runtime.error?.(...args) : undefined,
+      });
+    }
+
     route.agentId = routingResult.finalAgentId;
     route.sessionKey = routingResult.finalSessionKey;
   }
   // ===== 动态 Agent 路由注入结束 =====
 
+  const relocatedMediaList = await relocateInboundMediaToAgentWorkspace({
+    core,
+    config,
+    runtime,
+    agentId: route.agentId,
+    mediaList,
+  });
+
   // 构建会话标签
   const fromLabel = chatType === "group" ? `group:${chatId}` : `user:${body.from.userid}`;
 
   // 当只有媒体没有文本时，使用占位符标识媒体类型
-  const hasImages = mediaList.some((m) => m.contentType?.startsWith("image/"));
-  const messageBody = text || (mediaList.length > 0 ? (hasImages ? MEDIA_IMAGE_PLACEHOLDER : MEDIA_DOCUMENT_PLACEHOLDER) : "");
+  const hasImages = relocatedMediaList.some((m) => m.contentType?.startsWith("image/"));
+  const messageBody = text || (relocatedMediaList.length > 0 ? (hasImages ? MEDIA_IMAGE_PLACEHOLDER : MEDIA_DOCUMENT_PLACEHOLDER) : "");
+  const isCommand = /^\/\S+/.test(messageBody.trimStart());
+  const { commandBody, modelInputBody } = buildDynamicAgentInboundBody({
+    agentId: route.agentId,
+    commandBody: messageBody,
+    isCommand,
+  });
 
   // 构建多媒体数组
-  const mediaPaths = mediaList.length > 0 ? mediaList.map((m) => m.path) : undefined;
-  const mediaTypes = mediaList.length > 0
-    ? (mediaList.map((m) => m.contentType).filter(Boolean) as string[])
+  const mediaPaths = relocatedMediaList.length > 0 ? relocatedMediaList.map((m) => m.path) : undefined;
+  const mediaTypes = relocatedMediaList.length > 0
+    ? (relocatedMediaList.map((m) => m.contentType).filter(Boolean) as string[])
     : undefined;
 
   // 使用 route.agentId 解析 storePath（多 agent 场景下 session 路径隔离）
@@ -245,9 +395,9 @@ function buildMessageContext(
 
   // 构建标准消息上下文
   const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: messageBody,
-    RawBody: messageBody,
-    CommandBody: messageBody,
+    Body: modelInputBody,
+    RawBody: commandBody,
+    CommandBody: commandBody,
 
     MessageSid: body.msgid,
 
@@ -275,8 +425,8 @@ function buildMessageContext(
     ReqId: frame.headers.req_id,
     WeComFrame: frame,
 
-    MediaPath: mediaList[0]?.path,
-    MediaType: mediaList[0]?.contentType,
+    MediaPath: relocatedMediaList[0]?.path,
+    MediaType: relocatedMediaList[0]?.contentType,
     MediaPaths: mediaPaths,
     MediaTypes: mediaTypes,
     MediaUrls: mediaPaths,
@@ -440,8 +590,8 @@ async function finishThinkingStream(ctx: DeliverContext): Promise<void> {
  * 路由消息到核心处理流程并处理回复
  */
 async function routeAndDispatchMessage(params: {
-  ctxPayload: ReturnType<typeof buildMessageContext>["ctxPayload"];
-  route: ReturnType<typeof buildMessageContext>["route"];
+  ctxPayload: Awaited<ReturnType<typeof buildMessageContext>>["ctxPayload"];
+  route: Awaited<ReturnType<typeof buildMessageContext>>["route"];
   storePath: string;
   chatId: string;
   chatType: string;
@@ -709,7 +859,7 @@ async function processWeComMessageNow(entry: WeComMessageEntry): Promise<void> {
   // }
 
   // Step 7: 构建上下文并路由到核心处理流程（带整体超时保护）
-  const { ctxPayload, route, storePath, chatId: resolvedChatId, chatType } = buildMessageContext(
+  const { ctxPayload, route, storePath, chatId: resolvedChatId, chatType } = await buildMessageContext(
     frame,
     account,
     config,

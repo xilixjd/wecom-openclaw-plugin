@@ -133,6 +133,9 @@ export function setWeComAccount(
     ...(account.sendThinkingMessage !== undefined || existing?.sendThinkingMessage !== undefined
       ? { sendThinkingMessage: account.sendThinkingMessage ?? existing?.sendThinkingMessage }
       : {}),
+    ...(account.dynamicAgents || existing?.dynamicAgents
+      ? { dynamicAgents: account.dynamicAgents ?? existing?.dynamicAgents }
+      : {}),
   };
 
 return {

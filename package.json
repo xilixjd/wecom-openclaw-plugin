@@ -1,5 +1,5 @@
 {
-  "name": "@wecom/wecom-openclaw-plugin",
+  "name": "@wecom/wecom-openclaw-plugin-fork",
   "version": "2026.4.3",
   "type": "module",
   "main": "dist/index.js",
@@ -55,7 +55,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@wecom/wecom-openclaw-plugin",
+      "npmSpec": "@wecom/wecom-openclaw-plugin-fork",
       "localPath": "extensions/wecom-openclaw-plugin",
       "defaultChoice": "npm"
     }
