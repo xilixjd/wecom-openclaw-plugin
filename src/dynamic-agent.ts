@@ -121,8 +121,73 @@ const dynamicSkillsChildWatchers = new Map<string, Map<string, fs.FSWatcher>>();
 const dynamicSkillsWorkspaceDirs = new Map<string, string>();
 const dynamicSkillsDeltaState = new Map<string, DynamicSkillsDeltaState>();
 
-function buildDynamicWorkspaceDir(agentId: string): string {
-    return path.join(resolveStateDir(), `workspace-${agentId}`);
+function deriveWorkspaceBaseDirFromSourceWorkspace(workspaceDir: string): string | undefined {
+    const resolved = path.resolve(workspaceDir);
+    const parent = path.dirname(resolved);
+    if (!parent || parent === resolved) {
+        return undefined;
+    }
+    return parent;
+}
+
+function deriveWorkspaceBaseDirFromAgentDir(agentDir: string): string | undefined {
+    const resolved = path.resolve(agentDir);
+    const agentParent = path.dirname(resolved);
+    const agentsRoot = path.dirname(agentParent);
+    if (path.basename(agentsRoot) !== "agents") {
+        return undefined;
+    }
+    const stateRoot = path.dirname(agentsRoot);
+    if (!stateRoot || stateRoot === agentsRoot) {
+        return undefined;
+    }
+    return stateRoot;
+}
+
+function resolveDynamicWorkspaceBaseDir(params: {
+    runtime: PluginRuntime;
+    config: OpenClawConfig;
+    sourceAgentId: string;
+}): string {
+    try {
+        const sourceWorkspace = resolveAgentWorkspaceDir(
+            params.runtime,
+            params.config,
+            params.sourceAgentId,
+        );
+        const derived = deriveWorkspaceBaseDirFromSourceWorkspace(sourceWorkspace);
+        if (derived) {
+            return derived;
+        }
+    } catch {
+        // Fall through to agentDir/stateDir based inference.
+    }
+
+    try {
+        const sourceAgentDir = resolveAgentDir(params.runtime, params.config, params.sourceAgentId);
+        const derived = deriveWorkspaceBaseDirFromAgentDir(sourceAgentDir);
+        if (derived) {
+            return derived;
+        }
+    } catch {
+        // Fall through to env-based state dir.
+    }
+
+    return resolveStateDir();
+}
+
+function buildDynamicWorkspaceDir(params: {
+    agentId: string;
+    runtime: PluginRuntime;
+    config: OpenClawConfig;
+    sourceAgentId: string;
+}): string {
+    const baseDir = resolveDynamicWorkspaceBaseDir({
+        runtime: params.runtime,
+        config: params.config,
+        sourceAgentId: params.sourceAgentId,
+    });
+    return path.join(baseDir, `workspace-${params.agentId}`);
 }
 
 function buildDynamicAgentEntry(params: {
@@ -140,14 +205,25 @@ export function ensureDynamicAgentConfigured(params: {
     dynamicAgentId: string;
     sourceAgentId: string;
     config: OpenClawConfig;
+    runtime: PluginRuntime;
     log?: DynamicLogger;
 }): string {
     const dynamicAgentId = String(params.dynamicAgentId).trim().toLowerCase();
     if (!dynamicAgentId) {
-        return buildDynamicWorkspaceDir("unknown");
+        return buildDynamicWorkspaceDir({
+            agentId: "unknown",
+            runtime: params.runtime,
+            config: params.config,
+            sourceAgentId: params.sourceAgentId,
+        });
     }
 
-    const workspaceDir = buildDynamicWorkspaceDir(dynamicAgentId);
+    const workspaceDir = buildDynamicWorkspaceDir({
+        agentId: dynamicAgentId,
+        runtime: params.runtime,
+        config: params.config,
+        sourceAgentId: params.sourceAgentId,
+    });
     const cfg = params.config as OpenClawConfig & {
         agents?: {
             list?: MutableAgentEntry[];
@@ -524,6 +600,7 @@ export function ensureDynamicAgentWorkspace(params: {
         dynamicAgentId,
         sourceAgentId,
         config: params.config,
+        runtime: params.runtime,
         log: params.log,
     });
 
@@ -608,6 +685,7 @@ export function prepareDynamicAgentRuntime(params: {
         dynamicAgentId: params.dynamicAgentId,
         sourceAgentId: params.sourceAgentId,
         config: params.config,
+        runtime: params.runtime,
         log: params.log,
     });
 

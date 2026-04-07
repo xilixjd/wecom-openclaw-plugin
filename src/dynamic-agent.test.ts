@@ -73,11 +73,13 @@ describe("dynamic-agent runtime workspace", () => {
   test("registers a standalone workspace for the dynamic agent", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const cfg = createConfig();
+    const runtime = createRuntime();
 
     const workspaceDir = ensureDynamicAgentConfigured({
       dynamicAgentId: "wecom-default-dm-chuigeqiqiu",
       sourceAgentId: "wecom-first",
       config: cfg,
+      runtime,
     });
 
     expect(workspaceDir).toBe(
@@ -146,5 +148,59 @@ describe("dynamic-agent runtime workspace", () => {
         path.join(root, "workspace-first", "wecom-default-dm-chuigeqiqiu"),
       ),
     ).toBe(false);
+  });
+
+  test("derives the dynamic workspace beside the source workspace instead of hardcoding stateDir", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "some-other-state-root"));
+
+    const customBase = path.join(root, "custom-openclaw-home");
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "wecom-first",
+            default: true,
+            workspace: path.join(customBase, "workspace-first"),
+          },
+        ],
+      },
+      channels: {
+        wecom: {
+          dynamicAgents: {
+            enabled: true,
+            dmCreateAgent: true,
+            groupEnabled: true,
+            workspaceSeed: false,
+          },
+        },
+      },
+    } as any;
+
+    const runtime = {
+      agent: {
+        resolveAgentDir: (_cfg: unknown, agentId: string) =>
+          path.join(customBase, "agents", agentId, "agent"),
+        resolveAgentWorkspaceDir: (runtimeCfg: any, agentId: string) => {
+          const normalized = String(agentId).trim().toLowerCase();
+          const entry = (runtimeCfg?.agents?.list ?? []).find(
+            (candidate: any) =>
+              String(candidate?.id ?? "").trim().toLowerCase() === normalized,
+          );
+          return entry?.workspace ?? path.join(customBase, "workspace-first", normalized);
+        },
+      },
+    } as any;
+
+    const workspaceDir = ensureDynamicAgentConfigured({
+      dynamicAgentId: "wecom-default-dm-chuigeqiqiu",
+      sourceAgentId: "wecom-first",
+      config: cfg,
+      runtime,
+    });
+
+    expect(workspaceDir).toBe(
+      path.join(customBase, "workspace-wecom-default-dm-chuigeqiqiu"),
+    );
+    expect(workspaceDir).not.toContain(path.join(root, "some-other-state-root"));
   });
 });
