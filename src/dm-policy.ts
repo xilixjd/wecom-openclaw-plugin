@@ -65,7 +65,8 @@ export async function checkDmPolicy(params: {
   }
 
   // OpenClaw <= 2026.2.19 signature: readAllowFromStore(channel, env?, accountId?)
-  const oldStoreAllowFrom = await core.channel.pairing.readAllowFromStore('wecom', undefined, account.accountId).catch(() => []);;
+  // @ts-expect-error — 兼容旧版 SDK 的三参数签名，新版已改为单参数对象
+  const oldStoreAllowFrom = await core.channel.pairing.readAllowFromStore('wecom', undefined, account.accountId).catch(() => []);
   // Compatibility fallback for newer OpenClaw implementations.
   const newStoreAllowFrom = await core.channel.pairing
       .readAllowFromStore({ channel: CHANNEL_ID, accountId: account.accountId })

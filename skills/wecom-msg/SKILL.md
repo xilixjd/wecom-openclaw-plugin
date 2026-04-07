@@ -25,9 +25,9 @@ metadata:
 
 按时间范围查询有消息的会话列表，支持分页。参见 [API 详情](references/api-get-msg-chat-list.md)。
 
-### get_messages — 拉取会话消息
+### get_message — 拉取会话消息
 
-使用 `wecom_mcp` tool 调用 `wecom_mcp call msg get_messages '{"chat_type": 1, "chatid": "zhangsan", "begin_time": "2026-03-17 09:00:00", "end_time": "2026-03-17 18:00:00"}'`
+使用 `wecom_mcp` tool 调用 `wecom_mcp call msg get_message '{"chat_type": 1, "chatid": "zhangsan", "begin_time": "2026-03-17 09:00:00", "end_time": "2026-03-17 18:00:00"}'`
 
 根据会话类型和 ID 拉取指定时间范围内的消息记录，支持分页。支持 text/image/file/voice/video 消息类型，仅支持 7 天内。参见 [API 详情](references/api-get-messages.md)。
 
@@ -99,7 +99,7 @@ metadata:
 **执行流程**：
 1. 确定时间范围（用户指定或默认最近7天）
 2. 通过 **chatid查找规则** 确定目标会话的 `chatid` 和 `chat_type`
-3. 调用 `get_messages` 拉取消息列表
+3. 调用 `get_message` 拉取消息列表
 4. 调用 `wecom-contact-lookup` 的 `get_userlist` 获取通讯录，建立 userid→姓名 映射
 5. **统计非文本消息**：遍历消息列表，统计 `msgtype` 非 `text` 的消息（image/file/voice/video）数量和类型
 6. 展示消息时将 `userid` 替换为可读姓名，格式：

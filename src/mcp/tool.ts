@@ -13,12 +13,9 @@
  *   wecom_mcp call contact getContact '{}'
  */
 
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-import { sendJsonRpc, clearCategoryCache, MEDIA_DOWNLOAD_TIMEOUT_MS, type McpToolInfo } from "./transport.js";
+import { sendJsonRpc, type McpToolInfo } from "./transport.js";
 import { cleanSchemaForGemini } from "./schema.js";
-import { getWeComRuntime } from "../runtime.js";
-import { detectMime } from "../openclaw-compat.js";
+import { resolveBeforeCall, runAfterCall } from "./interceptors/index.js";
 
 // ============================================================================
 // 类型定义
@@ -86,207 +83,67 @@ const handleList = async (category: string): Promise<unknown> => {
 // call 操作：调用某品类的某个 MCP 工具
 // ============================================================================
 
-/**
- * 需要触发缓存清理的业务错误码集合
- *
- * 这些错误码出现在 MCP 工具调用返回的 content 文本中（业务层面），
- * 与 JSON-RPC 层面的错误码不同，需要在此处额外检测。
- *
- * - 850002: 机器人未被授权使用对应能力，需清理缓存以便下次重新拉取配置
- */
-const BIZ_CACHE_CLEAR_ERROR_CODES = new Set([850002]);
-
-/**
- * 检查 tools/call 的返回结果中是否包含需要清理缓存的业务错误码
- *
- * MCP Server 可能在正常的 JSON-RPC 响应中返回业务层错误，
- * 这些错误被包裹在 result.content[].text 中，需要解析后判断。
- */
-const checkBizErrorAndClearCache = (result: unknown, category: string): void => {
-  if (!result || typeof result !== "object") return;
-
-  const { content } = result as { content?: Array<{ type: string; text?: string }> };
-  if (!Array.isArray(content)) return;
-
-  for (const item of content) {
-    if (item.type !== "text" || !item.text) continue;
-    try {
-      const parsed = JSON.parse(item.text) as Record<string, unknown>;
-      if (typeof parsed.errcode === "number" && BIZ_CACHE_CLEAR_ERROR_CODES.has(parsed.errcode)) {
-        console.log(`[mcp] 检测到业务错误码 ${parsed.errcode} (category="${category}")，清理缓存`);
-        clearCategoryCache(category);
-        return;
-      }
-    } catch {
-      // text 不是 JSON 格式，跳过
-    }
-  }
-};
-
-// ============================================================================
-// get_msg_media 响应拦截：base64 → 本地文件
-// ============================================================================
-
-/**
- * 拦截 get_msg_media 的 MCP 响应
- *
- * 核心逻辑：
- * 1. 从 MCP result 的 content[].text 中提取业务 JSON
- * 2. 提取 media_item.base64_data，解码为 Buffer
- * 3. 通过 openclaw SDK 的 saveMediaBuffer 保存到本地媒体目录
- * 4. 替换响应：移除 base64_data，加入 local_path
- *
- * 这样大模型只看到轻量的文件路径信息，不会被 base64 数据消耗 token。
- */
-async function interceptMediaResponse(result: unknown): Promise<unknown> {
-  const t0 = performance.now();
-
-  // 1. 提取 MCP result 中的 content 数组
-  const content = (result as Record<string, unknown>)?.content;
-  if (!Array.isArray(content)) return result;
-
-  const textItem = content.find(
-    (c: Record<string, unknown>) => c.type === "text" && typeof c.text === "string",
-  ) as { type: string; text: string } | undefined;
-  if (!textItem) return result;
-
-  // 2. 解析业务 JSON
-  let bizData: Record<string, unknown>;
-  try {
-    bizData = JSON.parse(textItem.text) as Record<string, unknown>;
-  } catch {
-    // 非 JSON 格式，原样返回
-    return result;
-  }
-
-  // 3. 校验业务响应：errcode !== 0 或无 media_item 时原样返回
-  if (bizData.errcode !== 0) return result;
-
-  const mediaItem = bizData.media_item as Record<string, unknown> | undefined;
-  if (!mediaItem || typeof mediaItem.base64_data !== "string") return result;
-
-  const base64Data = mediaItem.base64_data as string;
-  const mediaName = mediaItem.name as string | undefined;
-  const mediaType = mediaItem.type as string | undefined;
-  const mediaId = mediaItem.media_id as string | undefined;
-
-  const tParsed = performance.now();
-
-  // 4. 解码 base64 → Buffer
-  const buffer = Buffer.from(base64Data, "base64");
-  const tDecoded = performance.now();
-
-  // 5. 检测 contentType，并通过 saveMediaBuffer 保存到本地媒体目录
-  const contentType = await detectMime({ buffer, filePath: mediaName }) ?? "application/octet-stream";
-  const tMimeDetected = performance.now();
-
-  // 企业微信聊天记录附件可达 20MB（文件消息上限），
-  // 而 saveMediaBuffer 默认 maxBytes 为 5MB（针对 outbound 场景），
-  // 此处显式放宽到 20MB 以支持大文件下载。
-  const INBOUND_MAX_BYTES = 20 * 1024 * 1024; // 20MB
-
-  const core = getWeComRuntime();
-  const saved = await core.channel.media.saveMediaBuffer(
-    buffer,
-    contentType,
-    "inbound",
-    INBOUND_MAX_BYTES,   // maxBytes: 放宽到 20MB，匹配企业微信文件消息上限
-    mediaName,           // originalFilename: 保留原始文件名
-  );
-
-  // 5.1 补偿：核心库 EXT_BY_MIME 可能缺少某些格式映射（如 audio/amr），
-  //     导致保存的文件没有后缀。此处检测并修复。
-  const MIME_EXT_PATCH: Record<string, string> = {
-    "audio/amr": ".amr",
-  };
-  const patchExt = MIME_EXT_PATCH[contentType];
-  if (patchExt && !path.extname(saved.path)) {
-    const newPath = saved.path + patchExt;
-    try {
-      await fs.rename(saved.path, newPath);
-      saved.path = newPath;
-    } catch {
-      // rename 失败不影响主流程，文件仍可用
-    }
-  }
-
-  const tSaved = performance.now();
-
-  // 6. 构造精简响应，移除 base64_data，加入本地路径
-  const newBizData = {
-    errcode: 0,
-    errmsg: "ok",
-    media_item: {
-      media_id: mediaId,
-      name: mediaName ?? saved.path.split("/").pop(),
-      type: mediaType,
-      local_path: saved.path,
-      size: buffer.length,
-      content_type: saved.contentType,
-    },
-  };
-
-  const tEnd = performance.now();
-
-  // 耗时日志：各环节耗时（ms）
-  console.log(
-    `[mcp] get_msg_media 拦截成功: media_id=${mediaId ?? "unknown"}, ` +
-    `type=${mediaType ?? "unknown"}, size=${buffer.length}, saved=${saved.path}\n` +
-    `  ⏱ 耗时明细 (总 ${(tEnd - t0).toFixed(1)}ms):\n` +
-    `    解析响应 JSON:   ${(tParsed - t0).toFixed(1)}ms\n` +
-    `    base64 解码:     ${(tDecoded - tParsed).toFixed(1)}ms  (${(base64Data.length / 1024).toFixed(0)}KB base64 → ${(buffer.length / 1024).toFixed(0)}KB buffer)\n` +
-    `    MIME 检测:       ${(tMimeDetected - tDecoded).toFixed(1)}ms  (${contentType})\n` +
-    `    saveMediaBuffer: ${(tSaved - tMimeDetected).toFixed(1)}ms\n` +
-    `    构造响应:        ${(tEnd - tSaved).toFixed(1)}ms`,
-  );
-
-  // 7. 返回修改后的 MCP result 结构
-  return {
-    content: [{
-      type: "text" as const,
-      text: JSON.stringify(newBizData),
-    }],
-  };
-}
-
-// ============================================================================
-// call 操作：调用某品类的某个 MCP 工具
-// ============================================================================
-
 const handleCall = async (
   category: string,
   method: string,
   args: Record<string, unknown>,
 ): Promise<unknown> => {
+  const ctx = { category, method, args };
   const callStart = performance.now();
 
-  // get_msg_media 使用延长的超时时间（120s），因为返回的 base64 数据可达 ~27MB
-  const options = method === "get_msg_media" ? { timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS } : undefined;
+  console.log(`[mcp] handleCall ${category}/${method} 入参: ${JSON.stringify(args)}`);
 
+  // 1. 收集拦截器的 beforeCall 配置（如超时时间、替换 args）
+  const { options, args: resolvedArgs } = await resolveBeforeCall(ctx);
+  const finalArgs = resolvedArgs ?? args;
+
+  if (resolvedArgs) {
+    console.log(
+      `[mcp] handleCall ${category}/${method} 拦截器替换 args: ${JSON.stringify(resolvedArgs).slice(0, 500)}` +
+      (JSON.stringify(resolvedArgs).length > 500 ? "...(truncated)" : ""),
+    );
+  }
+  if (options) {
+    console.log(`[mcp] handleCall ${category}/${method} 拦截器选项: ${JSON.stringify(options)}`);
+  }
+
+  // 2. 执行 MCP 调用
   const result = await sendJsonRpc(category, "tools/call", {
     name: method,
-    arguments: args,
+    arguments: finalArgs,
   }, options);
 
   const rpcDone = performance.now();
   const rpcMs = (rpcDone - callStart).toFixed(1);
 
-  // 检查业务层错误码，必要时清理缓存
-  checkBizErrorAndClearCache(result, category);
+  const resultStr = JSON.stringify(result);
+  console.log(
+    `[mcp] handleCall ${category}/${method} MCP 响应 (${rpcMs}ms): ${resultStr.slice(0, 800)}` +
+    (resultStr.length > 800 ? "...(truncated)" : ""),
+  );
 
-  // 对 get_msg_media 响应进行 base64 拦截：解码存本地，只返回路径给大模型
-  if (method === "get_msg_media") {
-    const intercepted = await interceptMediaResponse(result);
-    const totalMs = (performance.now() - callStart).toFixed(1);
+  // 3. 管道式执行 afterCall 拦截器（业务错误码检查、响应变换等）
+  const finalResult = await runAfterCall(ctx, result);
+
+  const totalMs = (performance.now() - callStart).toFixed(1);
+  const interceptMs = (performance.now() - rpcDone).toFixed(1);
+
+  // 有拦截器处理时打印详细耗时，否则只打印 RPC 耗时
+  if (finalResult !== result) {
+    const finalStr = JSON.stringify(finalResult);
+    console.log(
+      `[mcp] handleCall ${category}/${method} afterCall 变换后 (${interceptMs}ms): ${finalStr.slice(0, 500)}` +
+      (finalStr.length > 500 ? "...(truncated)" : ""),
+    );
     console.log(
       `[mcp] handleCall ${category}/${method} 总耗时: ${totalMs}ms` +
-      ` (MCP请求: ${rpcMs}ms, 拦截处理: ${(performance.now() - rpcDone).toFixed(1)}ms)`,
+      ` (MCP请求: ${rpcMs}ms, 拦截处理: ${interceptMs}ms)`,
     );
-    return intercepted;
+  } else {
+    console.log(`[mcp] handleCall ${category}/${method} 耗时: ${rpcMs}ms`);
   }
 
-  console.log(`[mcp] handleCall ${category}/${method} 耗时: ${rpcMs}ms`);
-  return result;
+  return finalResult;
 };
 
 // ============================================================================
@@ -357,21 +214,41 @@ export function createWeComMcpTool() {
     },
     async execute(_toolCallId: string, params: unknown) {
       const p = params as WeComToolsParams;
+      console.log(
+        `[mcp] execute: action=${p.action}, category=${p.category}` +
+        (p.method ? `, method=${p.method}` : "") +
+        (p.args ? `, args=${typeof p.args === "string" ? p.args : JSON.stringify(p.args)}` : ""),
+      );
       try {
+        let result: ReturnType<typeof textResult>;
         switch (p.action) {
           case "list":
-            return textResult(await handleList(p.category));
+            result = textResult(await handleList(p.category));
+            break;
           case "call": {
             if (!p.method) {
-              return textResult({ error: "action 为 call 时必须提供 method 参数" });
+              result = textResult({ error: "action 为 call 时必须提供 method 参数" });
+              break;
             }
             const args = parseArgs(p.args);
-            return textResult(await handleCall(p.category, p.method, args));
+            result = textResult(await handleCall(p.category, p.method, args));
+            break;
           }
           default:
-            return textResult({ error: `未知操作类型: ${String(p.action)}，支持 list 和 call` });
+            result = textResult({ error: `未知操作类型: ${String(p.action)}，支持 list 和 call` });
         }
+        console.log(
+          `[mcp] execute: action=${p.action}, category=${p.category}` +
+          (p.method ? `, method=${p.method}` : "") +
+          ` → 响应长度=${result.content[0].text.length} chars`,
+        );
+        return result;
       } catch (err) {
+        console.error(
+          `[mcp] execute: action=${p.action}, category=${p.category}` +
+          (p.method ? `, method=${p.method}` : "") +
+          ` → 异常: ${err instanceof Error ? err.message : String(err)}`,
+        );
         return errorResult(err);
       }
     },

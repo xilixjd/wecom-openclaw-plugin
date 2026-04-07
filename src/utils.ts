@@ -5,6 +5,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { DEFAULT_ACCOUNT_ID } from "./openclaw-compat.js";
 import { CHANNEL_ID } from "./const.js";
+import type { ResolvedAgentAccount } from "./types/account.js";
+import type { WecomAgentConfig, WecomNetworkConfig, WecomMediaConfig, WecomDynamicAgentsConfig } from "./types/config.js";
 
 // ============================================================================
 // 配置类型定义
@@ -39,7 +41,35 @@ export interface WeComConfig {
   sendThinkingMessage?: boolean;
   /** 额外允许访问的本地媒体路径白名单（支持 ~ 表示 home 目录），如 ["~/Downloads", "~/Documents"] */
   mediaLocalRoots?: string[];
+  /** Agent 模式配置（自建应用） */
+  agent?: WecomAgentConfig;
+  /** 网络配置 */
+  network?: WecomNetworkConfig;
+  /** 媒体处理配置 */
+  media?: WecomMediaConfig;
+  /** 动态 Agent 配置 */
+  dynamicAgents?: WecomDynamicAgentsConfig;
+
+  // ── Webhook 模式扩展字段 ──────────────────────────────────────────
+  /** 连接模式：webhook | websocket（默认 websocket） */
+  connectionMode?: "webhook" | "websocket";
+  /** Webhook 验证 token */
+  token?: string;
+  /** AES 加密密钥（43 字符 Base64） */
+  encodingAESKey?: string;
+  /** 接收方 ID */
+  receiveId?: string;
+  /** enter_chat 欢迎消息 */
+  welcomeText?: string;
+  /** 流式占位符提示内容 */
+  streamPlaceholderContent?: string;
 }
+
+/**
+ * 单个企业微信账号的配置类型（用于 accounts 字段下的每个账号）。
+ * 与 WeComConfig 字段完全一致，账号级字段会覆盖顶层同名字段。
+ */
+export type WeComAccountConfig = Partial<WeComConfig>;
 
 export const DefaultWsUrl = "wss://openws.work.weixin.qq.com";
 
@@ -53,6 +83,12 @@ export interface ResolvedWeComAccount {
   /** 是否发送"思考中"消息，默认为 true */
   sendThinkingMessage: boolean;
   config: WeComConfig;
+  /** Agent 模式能力（自建应用） */
+  agent?: ResolvedAgentAccount;
+  /** Webhook 模式配置 */
+  token?: string;
+  encodingAESKey?: string;
+  receiveId?: string,
 }
 
 /**
@@ -64,7 +100,7 @@ export function resolveWeComAccount(cfg: OpenClawConfig): ResolvedWeComAccount {
   return {
     accountId: DEFAULT_ACCOUNT_ID,
     name: wecomConfig.name ?? "企业微信",
-    enabled: wecomConfig.enabled ?? false,
+    enabled: wecomConfig.enabled !== false,
     websocketUrl: wecomConfig.websocketUrl || DefaultWsUrl,
     botId: wecomConfig.botId ?? "",
     secret: wecomConfig.secret ?? "",
@@ -106,4 +142,24 @@ return {
       [CHANNEL_ID]: merged,
     },
   };
+}
+
+/**
+ * 解析出口代理 URL（对齐原版 resolveWecomEgressProxyUrl）
+ *
+ * 优先级：
+ * 1. config.channels.wecom.network.egressProxyUrl
+ * 2. 环境变量：OPENCLAW_WECOM_EGRESS_PROXY_URL → WECOM_EGRESS_PROXY_URL → HTTPS_PROXY → ALL_PROXY → HTTP_PROXY
+ */
+export function resolveWecomEgressProxyUrl(cfg: OpenClawConfig): string | undefined {
+  const wecom = (cfg.channels?.[CHANNEL_ID] ?? {}) as WeComConfig;
+  const proxyUrl =
+    wecom.network?.egressProxyUrl ??
+    process.env.OPENCLAW_WECOM_EGRESS_PROXY_URL ??
+    process.env.WECOM_EGRESS_PROXY_URL ??
+    process.env.HTTPS_PROXY ??
+    process.env.ALL_PROXY ??
+    process.env.HTTP_PROXY ??
+    "";
+  return proxyUrl.trim() || undefined;
 }

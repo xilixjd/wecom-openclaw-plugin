@@ -126,23 +126,12 @@ export function checkGroupPolicy(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
 }): GroupPolicyCheckResult {
-  const { chatId, senderId, account, config, runtime } = params;
-  const wecomConfig = (config.channels?.[CHANNEL_ID] ?? {}) as WeComConfig;
+  const { chatId, senderId, account, runtime } = params;
+  // 使用 account.config（已经过多账号合并），而非顶层 config.channels.wecom
+  // 避免多账户模式下 groupAllowFrom / groups 等字段取不到账号级配置
+  const wecomConfig = account.config;
 
-  const defaultGroupPolicy = config.channels?.[CHANNEL_ID]?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "open"
-  // const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-  //   providerConfigPresent: config.channels?.[CHANNEL_ID] !== undefined,
-  //   groupPolicy: wecomConfig.groupPolicy,
-  //   defaultGroupPolicy,
-  // });
-
-  // warnMissingProviderGroupPolicyFallbackOnce({
-  //   providerMissingFallbackApplied,
-  //   providerKey: CHANNEL_ID,
-  //   accountId: account.accountId,
-  //   log: (msg) => runtime.log?.(msg),
-  // });
+  const groupPolicy = wecomConfig.groupPolicy ?? "open"
 
   const groupAllowFrom = wecomConfig.groupAllowFrom ?? [];
   const groupAllowed = isWeComGroupAllowed({

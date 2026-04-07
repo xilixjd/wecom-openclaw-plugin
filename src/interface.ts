@@ -42,10 +42,32 @@ export interface MessageState {
   hasMediaFailed?: boolean;
   /** 媒体发送失败时的纯文本错误摘要（用于替换 thinking 流展示给用户） */
   mediaErrorSummary?: string;
-  /** deliver 回调是否被调用过（用于区分"核心无回复"和"核心回复了空内容"） */
-  deliverCalled?: boolean;
+  // /** deliver 回调是否被调用过（用于区分"核心无回复"和"核心回复了空内容"） */
+  // deliverCalled?: boolean;
   /** 流式回复是否已过期（errcode 846608，>6分钟），需降级为主动发送 */
   streamExpired?: boolean;
+  /** 是否已成功发送过模板卡片 */
+  hasTemplateCard?: boolean;
+}
+
+// ============================================================================
+// 模板卡片类型
+// ============================================================================
+
+/** 从文本中提取的模板卡片 */
+export interface ExtractedTemplateCard {
+  /** 原始 JSON 对象（已验证 card_type 合法） */
+  cardJson: Record<string, unknown>;
+  /** card_type 值 */
+  cardType: string;
+}
+
+/** extractTemplateCards 返回值 */
+export interface TemplateCardExtractionResult {
+  /** 提取到的合法模板卡片列表 */
+  cards: ExtractedTemplateCard[];
+  /** 移除卡片代码块后的剩余文本 */
+  remainingText: string;
 }
 
 // ============================================================================
@@ -89,20 +111,20 @@ export interface WeComSubscribeRequest extends WeComRequest {
  * 企业微信推送消息格式
  */
 export interface WeComCallbackMessage {
-  cmd: WeComCommand.AIBOT_CALLBACK;
+  cmd: WeComCommand.AIBOT_CALLBACK | "aibot_event_callback";
   headers: {
     req_id: string;
   };
   body: {
     msgid: string;
     aibotid: string;
-    chatid: string;
+    chatid?: string;
     chattype: "single" | "group";
     from: {
       userid: string;
     };
     response_url: string;
-    msgtype: "text" | "image" | "voice" | "video" | "file" | "stream" | "mixed";
+    msgtype: "text" | "image" | "voice" | "video" | "file" | "stream" | "mixed" | "event";
     text?: {
       content: string;
     };
@@ -143,6 +165,22 @@ export interface WeComCallbackMessage {
     };
     stream?: {
       id: string;
+    };
+    event?: {
+      eventtype: string;
+      template_card_event?: {
+        card_type?: string;
+        event_key?: string;
+        task_id?: string;
+        selected_items?: {
+          selected_item?: Array<{
+            question_key?: string;
+            option_ids?: {
+              option_id?: string[];
+            };
+          }>;
+        };
+      };
     };
   };
 }

@@ -14,6 +14,7 @@ export interface MessageBody {
   chatid?: string;
   chattype: "single" | "group";
   from: {
+    corpid?: string;
     userid: string;
   };
   response_url?: string;
@@ -46,6 +47,22 @@ export interface MessageBody {
     image?: { url?: string; aeskey?: string };
     file?: { url?: string; aeskey?: string };
   };
+  event?: {
+    eventtype?: string;
+    template_card_event?: {
+      card_type?: string;
+      event_key?: string;
+      task_id?: string;
+      selected_items?: {
+        selected_item?: Array<{
+          question_key?: string;
+          option_ids?: {
+            option_id?: string[];
+          };
+        }>;
+      };
+    };
+  };
 }
 
 // ============================================================================
@@ -66,7 +83,53 @@ export interface ParsedMessageContent {
 // ============================================================================
 
 /**
- * 解析消息内容（支持单条消息、图文混排和引用消息）
+ * 将模板卡片事件回调格式化为可继续路由给大模型的文本。
+ *
+ * 这样后续 Agent 可以直接从 question_key / option_id 中理解用户的真实选择。
+ */
+function buildTemplateCardEventText(body: MessageBody): string | undefined {
+  const templateCardEvent = body.event?.template_card_event;
+  if (
+    body.msgtype !== "event" ||
+    body.event?.eventtype !== "template_card_event" ||
+    !templateCardEvent
+  ) {
+    return undefined;
+  }
+
+  const selectedItems = templateCardEvent.selected_items?.selected_item ?? [];
+  const selectedLines = selectedItems.map((item) => {
+    const questionKey = item.question_key?.trim() || "unknown_question";
+    const optionIds = item.option_ids?.option_id?.filter(Boolean) ?? [];
+    return `- ${questionKey}: ${optionIds.length > 0 ? optionIds.join(", ") : "(未选择)"}`;
+  });
+
+  const senderUserId = body.from?.userid || "";
+  const senderCorpId = body.from?.corpid || "";
+  const chatId = body.chatid || senderUserId;
+
+  return [
+    "[企业微信模板卡片回调]",
+    `event_type(事件类型): template_card_event`,
+    body.msgid ? `msgid(消息 id): ${body.msgid}` : undefined,
+    body.aibotid ? `aibotid(机器人 id): ${body.aibotid}` : undefined,
+    body.chattype ? `chat_type(会话类型): ${body.chattype}` : undefined,
+    chatId ? `chat_id(会话 id): ${chatId}` : undefined,
+    senderCorpId ? `from.corpid(企业 id): ${senderCorpId}` : undefined,
+    senderUserId ? `from.userid(发送人 id): ${senderUserId}` : undefined,
+    senderUserId ? `sender_userid(发送人 id): ${senderUserId}` : undefined,
+    templateCardEvent.card_type ? `card_type(卡片类型): ${templateCardEvent.card_type}` : undefined,
+    templateCardEvent.event_key ? `event_key(事件 key): ${templateCardEvent.event_key}` : undefined,
+    templateCardEvent.task_id ? `task_id(任务 id): ${templateCardEvent.task_id}` : undefined,
+    selectedLines.length > 0 ? "selected_items(选择项):" : "selected_items(选择项): []",
+    ...selectedLines,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+/**
+ * 解析消息内容（支持单条消息、图文混排、事件回调和引用消息）
  * @returns 提取的文本数组、图片URL数组和引用消息内容
  */
 export function parseMessageContent(body: MessageBody): ParsedMessageContent {
@@ -76,6 +139,16 @@ export function parseMessageContent(body: MessageBody): ParsedMessageContent {
   const fileUrls: string[] = [];
   const fileAesKeys = new Map<string, string>();
   let quoteContent: string | undefined;
+
+  // 处理模板卡片事件回调
+  
+  if (body.msgtype === "event") {
+    const eventText = buildTemplateCardEventText(body);
+    if (eventText) {
+      textParts.push(eventText);
+    }
+    return { textParts, imageUrls, imageAesKeys, fileUrls, fileAesKeys, quoteContent };
+  }
 
   // 处理图文混排消息
   if (body.msgtype === "mixed" && body.mixed?.msg_item) {

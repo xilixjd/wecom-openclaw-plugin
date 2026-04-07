@@ -39,7 +39,7 @@ wecom-meeting-create 提供企业微信预约会议的创建能力, 支持设置
 | `meeting_duration`       | integer | 是   | 会议持续时长 (秒), 例如 3600 = 1 小时             |
 | `description`            | string  | 否   | 会议描述                                          |
 | `location`               | string  | 否   | 会议地点                                          |
-| `invitees`               | object  | 是   | 被邀请人, 格式:`{"userid": ["lisi", "wangwu"]}` |
+| `invitees`               | object  | 否   | 被邀请人, 格式:`{"userid": ["lisi", "wangwu"]}` |
 | `settings`               | object  | 否   | 会议设置 (详见下方)                               |
 
 > 被邀请人 userid 通过 `wecom-contact-lookup` 技能获取

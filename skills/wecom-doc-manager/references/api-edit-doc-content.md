@@ -65,4 +65,4 @@
 
 - `content_type` 当前仅支持 `1`（Markdown 格式）
 - 此操作为**覆写**，会替换文档全部内容
-- 建议先调用 `get_document` 了解当前内容再编辑
+- 建议先调用 `get_doc_content` 了解当前内容再编辑

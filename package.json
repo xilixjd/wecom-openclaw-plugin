@@ -1,10 +1,15 @@
 {
   "name": "@wecom/wecom-openclaw-plugin",
-  "version": "2026.3.25",
+  "version": "2026.4.3",
   "type": "module",
-  "main": "dist/index.cjs.js",
-  "module": "dist/index.esm.js",
+  "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "files": [
     "dist",
     "skills",
@@ -12,8 +17,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rollup -c",
-    "dev": "rollup -c -w",
+    "build": "tsc",
+    "dev": "tsc --watch",
     "clean": "rm -rf dist",
     "prebuild": "npm run clean",
     "release": "node scripts/publish-all.mjs",
@@ -37,7 +42,7 @@
   "description": "OpenClaw WeCom (企业微信) channel plugin (official by Tencent WeCom team)",
   "openclaw": {
     "extensions": [
-      "./dist/index.esm.js"
+      "./dist/index.js"
     ],
     "channel": {
       "id": "wecom",
@@ -56,18 +61,15 @@
     }
   },
   "dependencies": {
+    "@wecom/aibot-node-sdk": "^1.0.6",
+    "fast-xml-parser": "^5.5.9",
     "file-type": "^21.3.0",
-    "@wecom/aibot-node-sdk": "^1.0.4"
+    "undici": "^7.24.6",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@rollup/plugin-commonjs": "^25.0.7",
-    "@rollup/plugin-json": "^6.1.0",
-    "@rollup/plugin-node-resolve": "^15.2.3",
-    "@rollup/plugin-typescript": "^11.1.6",
-    "openclaw": ">=2026.3.13",
-    "rollup": "^4.9.6",
-    "rollup-plugin-dts": "^6.1.0",
-    "tslib": "^2.6.2",
-    "typescript": "^5.3.3"
+    "openclaw": ">=2026.3.28",
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.1"
   }
 }

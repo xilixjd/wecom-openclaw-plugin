@@ -63,7 +63,7 @@ wecom-meeting-manage 提供企业微信会议管理能力, 包含以下功能:
 | 参数          | 类型   | 必填 | 说明                                   |
 | ------------- | ------ | ---- | -------------------------------------- |
 | `meetingid` | string | 是   | 会议 ID, 通过 `wecom-meeting-query` 技能获取                          |
-| `invitees`  | array  | 否   | 受邀成员列表, 每项包含 `userid` 字段 |
+| `invitees`  | array  | 是   | 受邀成员列表, 每项包含 `userid` 字段 |
 
 > **注意**: invitees 为全量覆盖, 传入的列表将替换现有成员列表.
 > invitees 的 userid 通过 `wecom-contact-lookup` 技能获取
@@ -92,7 +92,7 @@ wecom-meeting-manage 提供企业微信会议管理能力, 包含以下功能:
 
 使用 `wecom_mcp` tool 调用 `wecom_mcp call meeting cancel_meeting '{"meetingid": "<target_meetingid>"}'`
 
-4. **展示结果**:
+3. **展示结果**:
 
 ```
 ✅ 会议已取消: 技术方案评审
@@ -107,7 +107,7 @@ wecom-meeting-manage 提供企业微信会议管理能力, 包含以下功能:
 **步骤:**
 
 1. **定位会议**: 通过 `wecom-meeting-query` 技能查询会议列表 + 匹配找到目标会议.
-2. **获取当前受邀成员**: `set_invite_members` 为全量覆盖, 必须先通过 `wecom-meeting-query` 技能的 `get_meeting_info` 获取会议详情, 获取现有成员后再合并.
+2. **获取当前受邀成员**: `set_invite_meeting_members` 为全量覆盖, 必须先通过 `wecom-meeting-query` 技能的 `get_meeting_info` 获取会议详情, 获取现有成员后再合并.
 3. **通讯录查询**: 调用 `wecom-contact-lookup` 技能获取通讯录成员, 按姓名筛选出王五的 userid.
 
 使用 `wecom_mcp` tool 调用 `wecom_mcp call contact get_userlist '{}'`
@@ -119,7 +119,7 @@ wecom-meeting-manage 提供企业微信会议管理能力, 包含以下功能:
 
 使用 `wecom_mcp` tool 调用 `wecom_mcp call meeting set_invite_meeting_members '{"meetingid": "<target_meetingid>", "invitees": [{"userid": "zhangsan"}, {"userid": "lisi"}, {"userid": "wangwu"}]}'`
 
-7. **展示结果**:
+6. **展示结果**:
 
 ```
 ✅ 会议成员已更新: 技术方案评审
@@ -133,4 +133,4 @@ wecom-meeting-manage 提供企业微信会议管理能力, 包含以下功能:
 - **参与人仅支持企业内成员**, 不支持外部人员
 - **通讯录查询**: 涉及参与人时, 需先通过 `wecom-contact-lookup` 技能的 `get_userlist` 接口获取全量通讯录成员, 再按姓名/别名本地筛选匹配出对应的 `userid`. 该接口无入参, 返回当前用户可见范围内的成员列表 (含 `userid`, `name`, `alias`)
 - **定位会议**: 管理操作需先通过 `wecom-meeting-query` 技能查询到目标会议的 meetingid
-- **成员更新为全量覆盖**: `set_invite_members` 传入的列表将替换现有成员列表, 需先获取当前成员再合并
+- **成员更新为全量覆盖**: `set_invite_meeting_members` 传入的列表将替换现有成员列表, 需先获取当前成员再合并

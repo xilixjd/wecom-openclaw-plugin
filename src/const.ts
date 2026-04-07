@@ -35,7 +35,7 @@ export const FILE_DOWNLOAD_TIMEOUT_MS = 60_000;
 export const REPLY_SEND_TIMEOUT_MS = 15_000;
 
 /** 消息处理总超时时间（毫秒） */
-export const MESSAGE_PROCESS_TIMEOUT_MS = 5 * 60 * 1000;
+export const MESSAGE_PROCESS_TIMEOUT_MS = 6 * 60 * 1000;
 
 /** WebSocket 心跳间隔（毫秒） */
 export const WS_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -133,3 +133,68 @@ export const CMD_ENTER_EVENT_REPLY = "ww_ai_robot_enter_event";
 
 /** WSClient scene 参数：企微 OpenClaw 场景 */
 export const SCENE_WECOM_OPENCLAW = 1;
+/**
+ * WeCom 双模式常量定义
+ */
+
+/** 固定 Webhook 路径 */
+export const WEBHOOK_PATHS = {
+    /** Bot 模式历史兼容路径（不再维护） */
+    BOT: "/wecom",
+    /** Bot 模式历史备用兼容路径（不再维护） */
+    BOT_ALT: "/wecom/bot",
+    /** Agent 模式历史兼容路径（不再维护） */
+    AGENT: "/wecom/agent",
+    /** Bot 模式推荐路径前缀 */
+    BOT_PLUGIN: "/plugins/wecom/bot",
+    /** Agent 模式推荐路径前缀 */
+    AGENT_PLUGIN: "/plugins/wecom/agent",
+} as const;
+
+/** 企业微信 API 端点 */
+export const API_ENDPOINTS = {
+    GET_TOKEN: "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
+    SEND_MESSAGE: "https://qyapi.weixin.qq.com/cgi-bin/message/send",
+    SEND_APPCHAT: "https://qyapi.weixin.qq.com/cgi-bin/appchat/send",
+    UPLOAD_MEDIA: "https://qyapi.weixin.qq.com/cgi-bin/media/upload",
+    DOWNLOAD_MEDIA: "https://qyapi.weixin.qq.com/cgi-bin/media/get",
+} as const;
+
+/** 各类限制常量 */
+export const LIMITS = {
+    /** 文本消息最大字节数 */
+    TEXT_MAX_BYTES: 2048,
+    /** Token 刷新缓冲时间 (提前刷新) */
+    TOKEN_REFRESH_BUFFER_MS: 60_000,
+    /** HTTP 请求超时 */
+    REQUEST_TIMEOUT_MS: 15_000,
+    /** 最大请求体大小 */
+    MAX_REQUEST_BODY_SIZE: 1024 * 1024,
+} as const;
+
+/** AES 加密常量 */
+export const CRYPTO = {
+    /** PKCS#7 块大小 */
+    PKCS7_BLOCK_SIZE: 32,
+    /** AES Key 长度 */
+    AES_KEY_LENGTH: 32,
+} as const;
+
+// ============================================================================
+// 模板卡片配置
+// ============================================================================
+
+/** 合法的模板卡片 card_type 列表 */
+export const VALID_CARD_TYPES: string[] = [
+  "text_notice",
+  "news_notice",
+  "button_interaction",
+  "vote_interaction",
+  "multiple_interaction",
+];
+
+/** 模板卡片缓存条目 TTL（毫秒）：24小时 */
+export const TEMPLATE_CARD_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** 模板卡片缓存最大条目数 */
+export const TEMPLATE_CARD_CACHE_MAX_SIZE = 300;
