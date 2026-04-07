@@ -99,6 +99,13 @@ type DynamicSkillsDeltaState = {
     changes: Map<string, DynamicSkillDelta>;
 };
 
+type MutableAgentEntry = {
+    id?: string;
+    workspace?: string;
+    default?: boolean;
+    [key: string]: unknown;
+};
+
 const DYNAMIC_WORKSPACE_STANDARD_FILES = [
     "AGENTS.md",
     "SOUL.md",
@@ -113,6 +120,81 @@ const dynamicSkillsRootWatchers = new Map<string, fs.FSWatcher>();
 const dynamicSkillsChildWatchers = new Map<string, Map<string, fs.FSWatcher>>();
 const dynamicSkillsWorkspaceDirs = new Map<string, string>();
 const dynamicSkillsDeltaState = new Map<string, DynamicSkillsDeltaState>();
+
+function buildDynamicWorkspaceDir(agentId: string): string {
+    return path.join(resolveStateDir(), `workspace-${agentId}`);
+}
+
+function buildDynamicAgentEntry(params: {
+    dynamicAgentId: string;
+    workspaceDir: string;
+}): MutableAgentEntry {
+    return {
+        id: params.dynamicAgentId,
+        workspace: params.workspaceDir,
+        default: false,
+    };
+}
+
+export function ensureDynamicAgentConfigured(params: {
+    dynamicAgentId: string;
+    sourceAgentId: string;
+    config: OpenClawConfig;
+    log?: DynamicLogger;
+}): string {
+    const dynamicAgentId = String(params.dynamicAgentId).trim().toLowerCase();
+    if (!dynamicAgentId) {
+        return buildDynamicWorkspaceDir("unknown");
+    }
+
+    const workspaceDir = buildDynamicWorkspaceDir(dynamicAgentId);
+    const cfg = params.config as OpenClawConfig & {
+        agents?: {
+            list?: MutableAgentEntry[];
+        };
+    };
+
+    if (!cfg.agents || typeof cfg.agents !== "object") {
+        cfg.agents = {};
+    }
+
+    if (!Array.isArray(cfg.agents.list)) {
+        cfg.agents.list = [];
+    }
+
+    const nextEntry = buildDynamicAgentEntry({
+        dynamicAgentId,
+        workspaceDir,
+    });
+
+    const existingIndex = cfg.agents.list.findIndex(
+        (entry) => String(entry?.id ?? "").trim().toLowerCase() === dynamicAgentId,
+    );
+
+    if (existingIndex < 0) {
+        cfg.agents.list.push(nextEntry);
+        params.log?.(
+            `[wecom][dynamic] runtime agent entry prepared for ${dynamicAgentId} workspace=${workspaceDir}`,
+        );
+        return workspaceDir;
+    }
+
+    const existingEntry = cfg.agents.list[existingIndex];
+    if (
+        String(existingEntry?.workspace ?? "").trim() !== workspaceDir ||
+        existingEntry?.default !== false
+    ) {
+        cfg.agents.list[existingIndex] = {
+            ...existingEntry,
+            ...nextEntry,
+        };
+        params.log?.(
+            `[wecom][dynamic] runtime agent entry refreshed for ${dynamicAgentId} workspace=${workspaceDir}`,
+        );
+    }
+
+    return workspaceDir;
+}
 
 function resolveAgentDir(runtime: PluginRuntime, config: OpenClawConfig, agentId: string): string {
     try {
@@ -438,6 +520,13 @@ export function ensureDynamicAgentWorkspace(params: {
     }
     const sourceAgentId = String(params.sourceAgentId).trim().toLowerCase() || "main";
 
+    ensureDynamicAgentConfigured({
+        dynamicAgentId,
+        sourceAgentId,
+        config: params.config,
+        log: params.log,
+    });
+
     const targetAgentDir = resolveAgentDir(params.runtime, params.config, dynamicAgentId);
     const targetWorkspace = resolveAgentWorkspaceDir(params.runtime, params.config, dynamicAgentId);
     const seedMarker = path.join(targetWorkspace, ".seeded");
@@ -505,4 +594,26 @@ export function ensureDynamicAgentWorkspace(params: {
         workspaceDir: targetWorkspace,
         error: params.error,
     });
+}
+
+export function prepareDynamicAgentRuntime(params: {
+    dynamicAgentId: string;
+    sourceAgentId: string;
+    config: OpenClawConfig;
+    runtime: PluginRuntime;
+    log?: DynamicLogger;
+    error?: DynamicLogger;
+}): void {
+    ensureDynamicAgentConfigured({
+        dynamicAgentId: params.dynamicAgentId,
+        sourceAgentId: params.sourceAgentId,
+        config: params.config,
+        log: params.log,
+    });
+
+    if (!getDynamicAgentConfig(params.config).workspaceSeed) {
+        return;
+    }
+
+    ensureDynamicAgentWorkspace(params);
 }

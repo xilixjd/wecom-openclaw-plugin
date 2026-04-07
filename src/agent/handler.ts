@@ -22,6 +22,7 @@ import {
 import { sendText, downloadMedia, uploadMedia, sendMedia as sendAgentMedia } from "./api-client.js";
 import type { WecomAgentInboundMessage } from "../types/index.js";
 import { buildWecomUnauthorizedCommandPrompt, resolveWecomCommandAuthorization } from "../shared/command-auth.js";
+import { prepareDynamicAgentRuntime } from "../dynamic-agent.js";
 import { processDynamicRouting } from "../dynamic-routing.js";
 import { CHANNEL_ID, DEFAULT_MEDIA_MAX_MB } from "../const.js";
 
@@ -454,6 +455,14 @@ async function processAgentMessage(params: {
 
     // 应用动态路由结果
     if (routingResult.routeModified) {
+        prepareDynamicAgentRuntime({
+            dynamicAgentId: routingResult.finalAgentId,
+            sourceAgentId: route.agentId,
+            config,
+            runtime: core,
+            log: (msg) => log?.(msg.replace(/^\[wecom\]\[dynamic\]/, "[wecom-agent]")),
+            error: (msg) => error?.(msg.replace(/^\[wecom\]\[dynamic\]/, "[wecom-agent]")),
+        });
         route.agentId = routingResult.finalAgentId;
         route.sessionKey = routingResult.finalSessionKey;
     }

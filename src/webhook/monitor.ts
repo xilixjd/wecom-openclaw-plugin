@@ -47,6 +47,7 @@ import {
   buildStreamPlaceholderReply,
   buildStreamTextPlaceholderReply,
 } from "./helpers.js";
+import { prepareDynamicAgentRuntime } from "../dynamic-agent.js";
 import { processDynamicRouting } from "../dynamic-routing.js";
 // ============================================================================
 // 入站消息处理
@@ -656,6 +657,14 @@ export async function startAgentForStream(params: {
 
   // 应用动态路由结果
   if (routingResult.routeModified) {
+    prepareDynamicAgentRuntime({
+      dynamicAgentId: routingResult.finalAgentId,
+      sourceAgentId: route.agentId,
+      config,
+      runtime: core,
+      log: (msg) => target.runtime.log?.(msg.replace(/^\[wecom\]\[dynamic\]/, "[webhook]")),
+      error: (msg) => target.runtime.error?.(msg.replace(/^\[wecom\]\[dynamic\]/, "[webhook]")),
+    });
     route.agentId = routingResult.finalAgentId;
     route.sessionKey = routingResult.finalSessionKey;
   }

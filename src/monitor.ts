@@ -30,8 +30,7 @@ import { getDefaultMediaLocalRoots, resolveStateDir } from "./openclaw-compat.js
 import type { ResolvedWeComAccount, WeComConfig } from "./utils.js";
 import {
   buildDynamicAgentInboundBody,
-  ensureDynamicAgentWorkspace,
-  getDynamicAgentConfig,
+  prepareDynamicAgentRuntime,
   resolveAgentWorkspaceDir,
 } from "./dynamic-agent.js";
 import {
@@ -344,17 +343,14 @@ async function buildMessageContext(
 
   // 应用动态路由结果
   if (routingResult.routeModified) {
-    const dynamicConfig = getDynamicAgentConfig(config);
-    if (dynamicConfig.workspaceSeed) {
-      ensureDynamicAgentWorkspace({
-        dynamicAgentId: routingResult.finalAgentId,
-        sourceAgentId: route.agentId,
-        config,
-        runtime: core,
-        log: runtime?.log ? (...args: any[]) => runtime.log?.(...args) : undefined,
-        error: runtime?.error ? (...args: any[]) => runtime.error?.(...args) : undefined,
-      });
-    }
+    prepareDynamicAgentRuntime({
+      dynamicAgentId: routingResult.finalAgentId,
+      sourceAgentId: route.agentId,
+      config,
+      runtime: core,
+      log: runtime?.log ? (...args: any[]) => runtime.log?.(...args) : undefined,
+      error: runtime?.error ? (...args: any[]) => runtime.error?.(...args) : undefined,
+    });
 
     route.agentId = routingResult.finalAgentId;
     route.sessionKey = routingResult.finalSessionKey;
