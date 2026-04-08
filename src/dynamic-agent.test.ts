@@ -44,8 +44,7 @@ function createRuntime() {
     agent: {
       resolveAgentDir: (_cfg: unknown, agentId: string) =>
         path.join(root, "agents", agentId, "agent"),
-      // Simulate the current nested-path behavior unless the plugin explicitly
-      // registers a standalone workspace for the dynamic agent first.
+      // Mirror the current OpenClaw core workspace resolution rules.
       resolveAgentWorkspaceDir: (cfg: any, agentId: string) => {
         const normalized = String(agentId).trim().toLowerCase();
         const entry = (cfg?.agents?.list ?? []).find(
@@ -55,10 +54,21 @@ function createRuntime() {
         if (typeof entry?.workspace === "string" && entry.workspace.trim()) {
           return entry.workspace;
         }
-        if (normalized === "wecom-first") {
-          return path.join(root, "workspace-first");
+
+        const defaultsWorkspace = String(cfg?.agents?.defaults?.workspace ?? "").trim();
+        const list = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
+        const defaultEntry = list.find((candidate: any) => candidate?.default) ?? list[0];
+        const defaultAgentId = String(defaultEntry?.id ?? "main").trim().toLowerCase();
+
+        if (!normalized || normalized === defaultAgentId) {
+          return defaultsWorkspace || path.join(root, "workspace");
         }
-        return path.join(root, "workspace-first", normalized);
+
+        if (defaultsWorkspace) {
+          return path.join(defaultsWorkspace, normalized);
+        }
+
+        return path.join(root, `workspace-${normalized}`);
       },
     },
   } as any;
@@ -82,9 +92,7 @@ describe("dynamic-agent runtime workspace", () => {
       runtime,
     });
 
-    expect(workspaceDir).toBe(
-      path.join(root, "workspace-wecom-default-dm-chuigeqiqiu"),
-    );
+    expect(workspaceDir).toBe(path.join(root, "workspace-wecom-default-dm-chuigeqiqiu"));
     expect(cfg.agents.list).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -150,7 +158,7 @@ describe("dynamic-agent runtime workspace", () => {
     ).toBe(false);
   });
 
-  test("derives the dynamic workspace beside the source workspace instead of hardcoding stateDir", () => {
+  test("derives the dynamic workspace from stateDir even when defaults.workspace is set", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "some-other-state-root"));
 
     const customBase = path.join(root, "custom-openclaw-home");
@@ -176,20 +184,7 @@ describe("dynamic-agent runtime workspace", () => {
       },
     } as any;
 
-    const runtime = {
-      agent: {
-        resolveAgentDir: (_cfg: unknown, agentId: string) =>
-          path.join(customBase, "agents", agentId, "agent"),
-        resolveAgentWorkspaceDir: (runtimeCfg: any, agentId: string) => {
-          const normalized = String(agentId).trim().toLowerCase();
-          const entry = (runtimeCfg?.agents?.list ?? []).find(
-            (candidate: any) =>
-              String(candidate?.id ?? "").trim().toLowerCase() === normalized,
-          );
-          return entry?.workspace ?? path.join(customBase, "workspace-first", normalized);
-        },
-      },
-    } as any;
+    const runtime = createRuntime();
 
     const workspaceDir = ensureDynamicAgentConfigured({
       dynamicAgentId: "wecom-default-dm-chuigeqiqiu",
@@ -198,9 +193,7 @@ describe("dynamic-agent runtime workspace", () => {
       runtime,
     });
 
-    expect(workspaceDir).toBe(
-      path.join(customBase, "workspace-wecom-default-dm-chuigeqiqiu"),
-    );
-    expect(workspaceDir).not.toContain(path.join(root, "some-other-state-root"));
+    expect(workspaceDir).toBe(path.join(root, "some-other-state-root", "workspace-wecom-default-dm-chuigeqiqiu"));
+    expect(workspaceDir).not.toContain(customBase);
   });
 });
