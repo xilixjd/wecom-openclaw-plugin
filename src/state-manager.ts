@@ -12,6 +12,7 @@ import {
   MESSAGE_STATE_TTL_MS,
   MESSAGE_STATE_CLEANUP_INTERVAL_MS,
   MESSAGE_STATE_MAX_SIZE,
+  GLOBAL_WS_CLIENT_KEY,
 } from "./const.js";
 
 // ============================================================================
@@ -19,7 +20,8 @@ import {
 // ============================================================================
 
 /** WSClient 实例管理 */
-const wsClientInstances = new Map<string, WSClient>();
+const wsClientInstances: Map<string, WSClient> = ((globalThis as Record<string, unknown>)[GLOBAL_WS_CLIENT_KEY]
+  ?? ((globalThis as Record<string, unknown>)[GLOBAL_WS_CLIENT_KEY] = new Map<string, WSClient>())) as Map<string, WSClient>;
 
 /**
  * 获取指定账户的 WSClient 实例
@@ -200,7 +202,7 @@ export function deleteReqIdForChat(chatId: string, accountId = "default"): void 
 
 /**
  * 启动时预热 reqId 缓存（从磁盘加载到内存）
- * 
+ *
  * 注意：由于移除了磁盘存储，此函数现在只返回 0（无预热条目）
  */
 export async function warmupReqIdStore(
@@ -214,7 +216,7 @@ export async function warmupReqIdStore(
 
 /**
  * 立即将 reqId 数据刷写到磁盘（用于优雅退出）
- * 
+ *
  * 注意：由于移除了磁盘存储，此函数现在是无操作
  */
 export async function flushReqIdStore(accountId = "default"): Promise<void> {

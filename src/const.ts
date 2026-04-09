@@ -59,6 +59,9 @@ export const MESSAGE_STATE_CLEANUP_INTERVAL_MS = 60_000;
 /** messageStates Map 最大条目数 */
 export const MESSAGE_STATE_MAX_SIZE = 500;
 
+/** WebSocket 全局实例键 */
+export const GLOBAL_WS_CLIENT_KEY = "__wecom_openclaw_ws_client_instances" as const;
+
 // ============================================================================
 // 消息模板
 // ============================================================================

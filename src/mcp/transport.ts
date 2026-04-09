@@ -16,6 +16,13 @@ import { getWeComWebSocket } from "../state-manager.js";
 import { MCP_GET_CONFIG_CMD, MCP_CONFIG_FETCH_TIMEOUT_MS } from "../const.js";
 import { withTimeout } from "../timeout.js";
 import { PLUGIN_VERSION } from "../version.js";
+import { getWeComRuntime } from "../runtime.js";
+import {
+  resolveDefaultWeComAccountId,
+  listWeComAccountIds,
+  resolveWeComAccountMulti,
+} from "../accounts.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 // ============================================================================
 // 类型定义
@@ -131,15 +138,85 @@ const inflightInitRequests = new Map<string, Promise<McpSession>>();
 // ============================================================================
 
 /**
+ * 判断账户是否为长连接机器人（通过 botId + secret 配置）
+ */
+function isWebSocketBot(cfg: OpenClawConfig, accountId: string): boolean {
+  const resolved = resolveWeComAccountMulti({ cfg, accountId });
+  return Boolean(resolved.botId?.trim() && resolved.secret?.trim());
+}
+
+/**
+ * 解析用于 MCP 调用的账户 ID
+ *
+ * 优先级：
+ * 1. 默认账户（如果是长连接机器人）
+ * 2. 第一个长连接机器人账户
+ * 3. 无可用账户时返回 null
+ */
+function resolveMcpAccountId(cfg: OpenClawConfig): string | null {
+  const defaultAccountId = resolveDefaultWeComAccountId(cfg);
+
+  // 优先使用默认账户
+  if (isWebSocketBot(cfg, defaultAccountId)) {
+    return defaultAccountId;
+  }
+
+  // 默认账户非长连接，查找第一个长连接账户
+  const allIds = listWeComAccountIds(cfg);
+  for (const id of allIds) {
+    if (id !== defaultAccountId && isWebSocketBot(cfg, id)) {
+      console.log(
+        `${LOG_TAG} 默认账户 "${defaultAccountId}" 非长连接模式，使用账户 "${id}" 获取 MCP 配置`,
+      );
+      return id;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 根据配置解析当前用于 MCP 的账户 ID
+ *
+ * 通过 PluginRuntime 读取全局配置，按以下优先级选择账户：
+ * 1. 默认账户（如果配置了 botId + secret）
+ * 2. 第一个配置了 botId + secret 的长连接账户
+ * 3. 无可用长连接账户时回退到默认账户（会导致后续 WSClient 获取失败）
+ */
+function resolveCurrentAccountId(): string {
+  try {
+    const core = getWeComRuntime();
+    const cfg = core.config.loadConfig();
+
+    const mcpAccountId = resolveMcpAccountId(cfg);
+    if (mcpAccountId) {
+      return mcpAccountId;
+    }
+
+    // 无长连接账户，给出友好提示
+    console.warn(
+      `${LOG_TAG} 未找到长连接模式的机器人账户（需配置 botId + secret），MCP 功能不可用`,
+    );
+    return resolveDefaultWeComAccountId(cfg);
+  } catch {
+    // runtime 未初始化时回退到 "default"
+    return DEFAULT_ACCOUNT_ID;
+  }
+}
+
+/**
  * 通过 WSClient 拉取指定 category 的 MCP 完整配置
+ *
+ * 自动根据 defaultAccount 配置获取对应账户的 WSClient，无需手动传入 accountId。
  *
  * @param category - MCP 品类名称，如 doc、contact
  * @returns 完整的 response.body 配置对象（至少包含 url 字段）
  */
 async function fetchMcpConfig(category: string): Promise<Record<string, unknown>> {
-  const wsClient = getWeComWebSocket(DEFAULT_ACCOUNT_ID);
+  const accountId = resolveCurrentAccountId();
+  const wsClient = getWeComWebSocket(accountId);
   if (!wsClient) {
-    throw new Error("WSClient 未连接，无法拉取 MCP 配置");
+    throw new Error(`WSClient 未连接 (accountId="${accountId}")，无法拉取 MCP 配置`);
   }
 
   const reqId = generateReqId("mcp_config");
@@ -167,7 +244,7 @@ async function fetchMcpConfig(category: string): Promise<Record<string, unknown>
     );
   }
 
-  console.log(`${LOG_TAG} 配置拉取成功 (category="${category}")`);
+  console.log(`${LOG_TAG} 配置拉取成功 (accountId="${accountId}", category="${category}")`);
   return body as Record<string, unknown>;
 }
 
