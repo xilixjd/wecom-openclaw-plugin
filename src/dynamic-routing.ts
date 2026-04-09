@@ -5,6 +5,11 @@
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { PluginRuntime } from "openclaw/plugin-sdk";
+import {
+  buildAgentMainSessionKey,
+  buildAgentSessionKey,
+  deriveLastRoutePolicy,
+} from "openclaw/plugin-sdk/routing";
 import { shouldUseDynamicAgent, generateAgentId } from "./dynamic-agent.js";
 
 /**
@@ -16,6 +21,7 @@ export interface AgentRoute {
   matchedBy: string;
   accountId: string;
   mainSessionKey?: string;
+  lastRoutePolicy?: "main" | "session";
 }
 
 /**
@@ -52,6 +58,10 @@ export interface DynamicRoutingResult {
   finalAgentId: string;
   /** 最终的 sessionKey（可能被动态注入修改） */
   finalSessionKey: string;
+  /** 最终的 mainSessionKey（可能被动态注入修改） */
+  finalMainSessionKey?: string;
+  /** 最终的 lastRoutePolicy（可能被动态注入修改） */
+  finalLastRoutePolicy?: "main" | "session";
   /** 是否修改了路由（注入了动态 Agent） */
   routeModified: boolean;
 }
@@ -69,6 +79,7 @@ export interface DynamicRoutingResult {
  * @returns 处理结果
  */
 export function processDynamicRouting(params: DynamicRoutingParams): DynamicRoutingResult {
+  void params.core;
   const { route, config, accountId, chatType, chatId, senderId, log } = params;
 
   log?.(`[dynamic-routing] 🔍 调试 - matchedBy=${route.matchedBy}, agentId=${route.agentId}`);
@@ -79,6 +90,8 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
       useDynamicAgent: false,
       finalAgentId: route.agentId,
       finalSessionKey: route.sessionKey,
+      finalMainSessionKey: route.mainSessionKey,
+      finalLastRoutePolicy: route.lastRoutePolicy,
       routeModified: false,
     };
   }
@@ -94,16 +107,37 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
   // 使用动态 Agent
   if (useDynamicAgent) {
     log?.(`[dynamic-routing] 原始路由信息: agentId=${route.agentId}, matchedBy=${route.matchedBy}, sessionKey=${route.sessionKey}`);
-    
-    const targetAgentId = generateAgentId(chatType, chatId, accountId);
-    const targetSessionKey = `agent:${targetAgentId}:wecom:${accountId}:${chatType}:${chatId}`;
 
-    log?.(`[dynamic-routing] 🔄 路由注入: agentId=${targetAgentId}, sessionKey=${targetSessionKey}`);
+    const resolvedAccountId = route.accountId || accountId;
+    const targetAgentId = generateAgentId(chatType, chatId, resolvedAccountId);
+    const targetSessionKey = buildAgentSessionKey({
+      agentId: targetAgentId,
+      channel: "wecom",
+      accountId: resolvedAccountId,
+      peer: {
+        kind: chatType === "group" ? "group" : "direct",
+        id: chatId,
+      },
+      dmScope: config.session?.dmScope,
+    }).toLowerCase();
+    const targetMainSessionKey = buildAgentMainSessionKey({
+      agentId: targetAgentId,
+    }).toLowerCase();
+    const targetLastRoutePolicy = deriveLastRoutePolicy({
+      sessionKey: targetSessionKey,
+      mainSessionKey: targetMainSessionKey,
+    });
+
+    log?.(
+      `[dynamic-routing] 🔄 路由注入: agentId=${targetAgentId}, sessionKey=${targetSessionKey}, mainSessionKey=${targetMainSessionKey}, lastRoutePolicy=${targetLastRoutePolicy}`,
+    );
 
     return {
       useDynamicAgent: true,
       finalAgentId: targetAgentId,
       finalSessionKey: targetSessionKey,
+      finalMainSessionKey: targetMainSessionKey,
+      finalLastRoutePolicy: targetLastRoutePolicy,
       routeModified: true,
     };
   }
@@ -114,6 +148,8 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
     useDynamicAgent: false,
     finalAgentId: route.agentId,
     finalSessionKey: route.sessionKey,
+    finalMainSessionKey: route.mainSessionKey,
+    finalLastRoutePolicy: route.lastRoutePolicy,
     routeModified: false,
   };
 }

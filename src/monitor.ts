@@ -354,6 +354,12 @@ async function buildMessageContext(
 
     route.agentId = routingResult.finalAgentId;
     route.sessionKey = routingResult.finalSessionKey;
+    if (routingResult.finalMainSessionKey) {
+      route.mainSessionKey = routingResult.finalMainSessionKey;
+    }
+    if (routingResult.finalLastRoutePolicy) {
+      route.lastRoutePolicy = routingResult.finalLastRoutePolicy;
+    }
   }
   // ===== 动态 Agent 路由注入结束 =====
 
