@@ -83,9 +83,12 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
   const { route, config, accountId, chatType, chatId, senderId, log } = params;
 
   log?.(`[dynamic-routing] 🔍 调试 - matchedBy=${route.matchedBy}, agentId=${route.agentId}`);
-  
-  if (route.matchedBy !== "default") {
-    log?.(`[dynamic-routing] ℹ️  检测到匹配的 bindings (matchedBy=${route.matchedBy})，跳过动态路由`);
+
+  const allowDynamicOnMatchedBy = new Set(["default", "binding.account", "binding.channel"]);
+  if (!allowDynamicOnMatchedBy.has(route.matchedBy)) {
+    log?.(
+      `[dynamic-routing] ℹ️  检测到精细 bindings (matchedBy=${route.matchedBy})，保持固定路由，跳过动态路由`,
+    );
     return {
       useDynamicAgent: false,
       finalAgentId: route.agentId,
@@ -141,7 +144,7 @@ export function processDynamicRouting(params: DynamicRoutingParams): DynamicRout
       routeModified: true,
     };
   }
-  
+
   log?.('[dynamic-routing] 🔄不使用动态路由');
   // 不使用动态 Agent，返回原始路由
   return {

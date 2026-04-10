@@ -69,13 +69,73 @@ describe("dynamic routing", () => {
     );
   });
 
-  test("preserves main session metadata when dynamic routing is skipped", () => {
+  test("keeps dynamic routing enabled for account-level bindings", () => {
     const route = {
       agentId: "wecom-first",
       sessionKey: "agent:wecom-first:main",
       mainSessionKey: "agent:wecom-first:main",
       lastRoutePolicy: "main" as const,
       matchedBy: "binding.account" as const,
+      accountId: "main",
+    };
+
+    const result = processDynamicRouting({
+      route,
+      config: {
+        session: {
+          dmScope: "per-account-channel-peer",
+        },
+        channels: {
+          wecom: {
+            dynamicAgents: {
+              enabled: true,
+              dmCreateAgent: true,
+              groupEnabled: true,
+            },
+          },
+        },
+      } as any,
+      core: {} as any,
+      accountId: "main",
+      chatType: "dm",
+      chatId: "zhangsan",
+      senderId: "zhangsan",
+    });
+
+    const expectedAgentId = "wecom-main-dm-zhangsan";
+    const expectedSessionKey = buildAgentSessionKey({
+      agentId: expectedAgentId,
+      channel: "wecom",
+      accountId: "main",
+      peer: {
+        kind: "direct",
+        id: "zhangsan",
+      },
+      dmScope: "per-account-channel-peer",
+    }).toLowerCase();
+    const expectedMainSessionKey = buildAgentMainSessionKey({
+      agentId: expectedAgentId,
+    }).toLowerCase();
+
+    expect(result.routeModified).toBe(true);
+    expect(result.finalAgentId).toBe(expectedAgentId);
+    expect(result.finalSessionKey).toBe(expectedSessionKey);
+    expect(result.finalMainSessionKey).toBe(expectedMainSessionKey);
+    expect(result.finalLastRoutePolicy).toBe(
+      deriveLastRoutePolicy({
+        sessionKey: expectedSessionKey,
+        mainSessionKey: expectedMainSessionKey,
+      }),
+    );
+  });
+
+  test("preserves main session metadata when peer-level binding is matched", () => {
+    const route = {
+      agentId: "wecom-first",
+      sessionKey: "agent:wecom-first:main",
+      mainSessionKey: "agent:wecom-first:main",
+      lastRoutePolicy: "main" as const,
+      matchedBy: "binding.peer" as const,
       accountId: "main",
     };
 
