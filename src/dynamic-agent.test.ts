@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
+  buildDynamicAgentInboundBody,
   ensureDynamicAgentConfigured,
   prepareDynamicAgentRuntime,
 } from "./dynamic-agent.js";
@@ -195,5 +196,44 @@ describe("dynamic-agent runtime workspace", () => {
 
     expect(workspaceDir).toBe(path.join(root, "some-other-state-root", "workspace-wecom-default-dm-chuigeqiqiu"));
     expect(workspaceDir).not.toContain(customBase);
+  });
+
+  test("includes added skill description in the next runtime note", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const cfg = createConfig();
+    const runtime = createRuntime();
+
+    fs.mkdirSync(path.join(root, "workspace-first"), { recursive: true });
+    fs.mkdirSync(path.join(root, "workspace-first", "skills"), { recursive: true });
+    fs.writeFileSync(path.join(root, "workspace-first", "AGENTS.md"), "base agents");
+
+    prepareDynamicAgentRuntime({
+      dynamicAgentId: "wecom-default-dm-noteuser",
+      sourceAgentId: "wecom-first",
+      config: cfg,
+      runtime,
+    });
+
+    const stagingSkillDir = path.join(root, "staging-added-skill");
+    fs.mkdirSync(stagingSkillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stagingSkillDir, "SKILL.md"),
+      ["---", "name: added-skill", "description: Added skill description", "---", "", "body"].join("\n"),
+    );
+    fs.renameSync(
+      stagingSkillDir,
+      path.join(root, "workspace-wecom-default-dm-noteuser", "skills", "added-skill"),
+    );
+
+    await vi.waitFor(() => {
+      const normalResult = buildDynamicAgentInboundBody({
+        agentId: "wecom-default-dm-noteuser",
+        commandBody: "hello",
+        isCommand: false,
+      });
+      expect(normalResult.modelInputBody).toContain("added: added-skill");
+      expect(normalResult.modelInputBody).toContain("description: Added skill description");
+      expect(normalResult.modelInputBody).toContain("hello");
+    });
   });
 });
