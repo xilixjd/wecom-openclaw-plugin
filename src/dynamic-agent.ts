@@ -101,6 +101,13 @@ type DynamicSkillsDeltaState = {
     changes: Map<string, DynamicSkillDelta>;
 };
 
+type DynamicSkillSnapshot = {
+    skillName: string;
+    skillDir: string;
+    skillFilePath: string;
+    signature: string;
+};
+
 type MutableAgentEntry = {
     id?: string;
     workspace?: string;
@@ -118,10 +125,9 @@ const DYNAMIC_WORKSPACE_STANDARD_FILES = [
     "BOOTSTRAP.md",
 ] as const;
 
-const dynamicSkillsRootWatchers = new Map<string, fs.FSWatcher>();
-const dynamicSkillsChildWatchers = new Map<string, Map<string, fs.FSWatcher>>();
 const dynamicSkillsWorkspaceDirs = new Map<string, string>();
 const dynamicSkillsDeltaState = new Map<string, DynamicSkillsDeltaState>();
+const dynamicSkillsSnapshotState = new Map<string, Map<string, DynamicSkillSnapshot>>();
 
 function normalizeAgentId(agentId: string): string {
     return String(agentId).trim().toLowerCase();
@@ -378,11 +384,108 @@ function readSkillDescription(skillFilePath: string): string | undefined {
     return undefined;
 }
 
-function noteDynamicSkillFileChange(agentId: string, skillDir: string): void {
-    const skillName = path.basename(skillDir);
-    const skillFilePath = path.join(skillDir, "SKILL.md");
-    const exists = fs.existsSync(skillFilePath);
-    recordDynamicSkillDelta(agentId, skillName, exists ? "updated" : "removed", skillFilePath);
+function resolveSkillSignature(skillFilePath: string): string | undefined {
+    try {
+        const stat = fs.statSync(skillFilePath);
+        return `${stat.mtimeMs}:${stat.size}`;
+    } catch {
+        return undefined;
+    }
+}
+
+function collectDynamicSkillsSnapshot(skillsDir: string): Map<string, DynamicSkillSnapshot> {
+    const snapshot = new Map<string, DynamicSkillSnapshot>();
+    if (!fs.existsSync(skillsDir)) {
+        return snapshot;
+    }
+
+    let entries: fs.Dirent[] = [];
+    try {
+        entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+    } catch {
+        return snapshot;
+    }
+
+    for (const entry of entries) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+        const skillName = entry.name;
+        const skillDir = path.join(skillsDir, skillName);
+        const skillFilePath = path.join(skillDir, "SKILL.md");
+        if (!fs.existsSync(skillFilePath)) {
+            continue;
+        }
+
+        const signature = resolveSkillSignature(skillFilePath);
+        if (!signature) {
+            continue;
+        }
+
+        snapshot.set(skillName, {
+            skillName,
+            skillDir,
+            skillFilePath,
+            signature,
+        });
+    }
+
+    return snapshot;
+}
+
+function diffDynamicSkillsSnapshot(agentId: string, nextSnapshot: Map<string, DynamicSkillSnapshot>): void {
+    const prevSnapshot = dynamicSkillsSnapshotState.get(agentId);
+    if (!prevSnapshot) {
+        // First sync after process start/workspace registration establishes baseline only.
+        dynamicSkillsSnapshotState.set(agentId, nextSnapshot);
+        return;
+    }
+
+    for (const [skillName, prev] of prevSnapshot) {
+        const next = nextSnapshot.get(skillName);
+        if (!next) {
+            recordDynamicSkillDelta(agentId, skillName, "removed", prev.skillFilePath);
+            continue;
+        }
+        if (next.signature !== prev.signature) {
+            recordDynamicSkillDelta(
+                agentId,
+                skillName,
+                "updated",
+                next.skillFilePath,
+            );
+        }
+    }
+
+    for (const [skillName, next] of nextSnapshot) {
+        if (prevSnapshot.has(skillName)) {
+            continue;
+        }
+        recordDynamicSkillDelta(
+            agentId,
+            skillName,
+            "added",
+            next.skillFilePath,
+            readSkillDescription(next.skillFilePath),
+        );
+    }
+
+    dynamicSkillsSnapshotState.set(agentId, nextSnapshot);
+}
+
+function syncDynamicSkillsState(agentId: string, workspaceDir: string): void {
+    const normalizedWorkspaceDir = path.resolve(workspaceDir);
+    const existingWorkspaceDir = dynamicSkillsWorkspaceDirs.get(agentId);
+
+    if (existingWorkspaceDir && existingWorkspaceDir !== normalizedWorkspaceDir) {
+        dynamicSkillsSnapshotState.delete(agentId);
+        dynamicSkillsDeltaState.delete(agentId);
+    }
+
+    dynamicSkillsWorkspaceDirs.set(agentId, normalizedWorkspaceDir);
+    const skillsDir = path.join(normalizedWorkspaceDir, "skills");
+    const nextSnapshot = collectDynamicSkillsSnapshot(skillsDir);
+    diffDynamicSkillsSnapshot(agentId, nextSnapshot);
 }
 
 export function consumeDynamicSkillsDeltaNote(agentId: string): string | undefined {
@@ -415,6 +518,8 @@ export function buildDynamicAgentInboundBody(params: {
     isCommand: boolean;
 }): { commandBody: string; modelInputBody: string } {
     const { agentId, commandBody, isCommand } = params;
+    reconcileDynamicSkillsState(agentId);
+
     if (isCommand) {
         return { commandBody, modelInputBody: commandBody };
     }
@@ -430,153 +535,13 @@ export function buildDynamicAgentInboundBody(params: {
     };
 }
 
-function watchSkillChildDir(params: {
-    agentId: string;
-    childDir: string;
-    error?: DynamicLogger;
-}): void {
-    const { agentId, childDir } = params;
-    let watchers = dynamicSkillsChildWatchers.get(agentId);
-    if (!watchers) {
-        watchers = new Map<string, fs.FSWatcher>();
-        dynamicSkillsChildWatchers.set(agentId, watchers);
-    }
-    if (watchers.has(childDir) || !fs.existsSync(childDir)) {
+function reconcileDynamicSkillsState(agentId: string): void {
+    const workspaceDir = dynamicSkillsWorkspaceDirs.get(agentId);
+    if (!workspaceDir) {
         return;
     }
 
-    try {
-        const watcher = fs.watch(childDir, (_eventType, fileName) => {
-            if (!fileName || String(fileName) === "SKILL.md") {
-                noteDynamicSkillFileChange(agentId, childDir);
-            }
-        });
-        watcher.on("error", (err) => {
-            params.error?.(`[wecom][dynamic] skills child watcher error for ${agentId}: ${String(err)}`);
-        });
-        watchers.set(childDir, watcher);
-    } catch (err) {
-        params.error?.(`[wecom][dynamic] failed to watch skills dir ${childDir}: ${String(err)}`);
-    }
-}
-
-function syncDynamicSkillsChildWatchers(params: {
-    agentId: string;
-    skillsDir: string;
-    includeAdds: boolean;
-    error?: DynamicLogger;
-}): void {
-    const active = dynamicSkillsChildWatchers.get(params.agentId) ?? new Map<string, fs.FSWatcher>();
-    const nextDirs = new Set<string>();
-
-    if (fs.existsSync(params.skillsDir)) {
-        try {
-            const entries = fs.readdirSync(params.skillsDir, { withFileTypes: true });
-            for (const entry of entries) {
-                if (!entry.isDirectory()) {
-                    continue;
-                }
-                const childDir = path.join(params.skillsDir, entry.name);
-                nextDirs.add(childDir);
-                if (!active.has(childDir)) {
-                    watchSkillChildDir({
-                        agentId: params.agentId,
-                        childDir,
-                        error: params.error,
-                    });
-                    const skillFilePath = path.join(childDir, "SKILL.md");
-                    if (params.includeAdds && fs.existsSync(skillFilePath)) {
-                        recordDynamicSkillDelta(
-                            params.agentId,
-                            entry.name,
-                            "added",
-                            skillFilePath,
-                            readSkillDescription(skillFilePath),
-                        );
-                    }
-                }
-            }
-        } catch (err) {
-            params.error?.(`[wecom][dynamic] failed to scan skills dir ${params.skillsDir}: ${String(err)}`);
-        }
-    }
-
-    for (const [childDir, watcher] of active) {
-        if (nextDirs.has(childDir)) {
-            continue;
-        }
-        watcher.close();
-        active.delete(childDir);
-        recordDynamicSkillDelta(
-            params.agentId,
-            path.basename(childDir),
-            "removed",
-            path.join(childDir, "SKILL.md"),
-        );
-    }
-    dynamicSkillsChildWatchers.set(params.agentId, active);
-}
-
-function ensureDynamicSkillsWatcher(params: {
-    agentId: string;
-    workspaceDir: string;
-    error?: DynamicLogger;
-}): void {
-    const normalizedWorkspaceDir = path.resolve(params.workspaceDir);
-    const existingWorkspaceDir = dynamicSkillsWorkspaceDirs.get(params.agentId);
-    if (existingWorkspaceDir && existingWorkspaceDir !== normalizedWorkspaceDir) {
-        dynamicSkillsRootWatchers.get(params.agentId)?.close();
-        dynamicSkillsRootWatchers.delete(params.agentId);
-
-        const childWatchers = dynamicSkillsChildWatchers.get(params.agentId);
-        if (childWatchers) {
-            for (const watcher of childWatchers.values()) {
-                watcher.close();
-            }
-            dynamicSkillsChildWatchers.delete(params.agentId);
-        }
-    }
-
-    dynamicSkillsWorkspaceDirs.set(params.agentId, normalizedWorkspaceDir);
-    const skillsDir = path.join(normalizedWorkspaceDir, "skills");
-    if (!fs.existsSync(skillsDir)) {
-        return;
-    }
-
-    if (!dynamicSkillsRootWatchers.has(params.agentId)) {
-        try {
-            const watcher = fs.watch(skillsDir, (_eventType, fileName) => {
-                syncDynamicSkillsChildWatchers({
-                    agentId: params.agentId,
-                    skillsDir,
-                    includeAdds: true,
-                    error: params.error,
-                });
-                if (!fileName || String(fileName) === "SKILL.md") {
-                    recordDynamicSkillDelta(
-                        params.agentId,
-                        "(workspace-root)",
-                        "updated",
-                        path.join(skillsDir, "SKILL.md"),
-                    );
-                }
-            });
-            watcher.on("error", (err) => {
-                params.error?.(`[wecom][dynamic] skills root watcher error for ${params.agentId}: ${String(err)}`);
-            });
-            dynamicSkillsRootWatchers.set(params.agentId, watcher);
-        } catch (err) {
-            params.error?.(`[wecom][dynamic] failed to watch skills root ${skillsDir}: ${String(err)}`);
-            return;
-        }
-    }
-
-    syncDynamicSkillsChildWatchers({
-        agentId: params.agentId,
-        skillsDir,
-        includeAdds: false,
-        error: params.error,
-    });
+    syncDynamicSkillsState(agentId, workspaceDir);
 }
 
 function copyFileIfMissing(srcPath: string, destPath: string, error?: DynamicLogger): boolean {
@@ -709,11 +674,7 @@ export function ensureDynamicAgentWorkspace(params: {
         }
     }
 
-    ensureDynamicSkillsWatcher({
-        agentId: dynamicAgentId,
-        workspaceDir: targetWorkspace,
-        error: params.error,
-    });
+    syncDynamicSkillsState(dynamicAgentId, targetWorkspace);
 }
 
 export function prepareDynamicAgentRuntime(params: {

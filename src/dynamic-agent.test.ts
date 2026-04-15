@@ -236,4 +236,114 @@ describe("dynamic-agent runtime workspace", () => {
       expect(normalResult.modelInputBody).toContain("hello");
     });
   });
+
+  test("includes removed skill in the next runtime note", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const cfg = createConfig();
+    const runtime = createRuntime();
+
+    fs.mkdirSync(path.join(root, "workspace-first", "skills", "remove-me"), {
+      recursive: true,
+    });
+    fs.writeFileSync(path.join(root, "workspace-first", "AGENTS.md"), "base agents");
+    fs.writeFileSync(
+      path.join(root, "workspace-first", "skills", "remove-me", "SKILL.md"),
+      ["---", "name: remove-me", "description: Remove me", "---", "", "body"].join("\n"),
+    );
+
+    prepareDynamicAgentRuntime({
+      dynamicAgentId: "wecom-default-dm-remove-noteuser",
+      sourceAgentId: "wecom-first",
+      config: cfg,
+      runtime,
+    });
+
+    fs.rmSync(
+      path.join(root, "workspace-wecom-default-dm-remove-noteuser", "skills", "remove-me"),
+      { recursive: true, force: true },
+    );
+
+    await vi.waitFor(() => {
+      const normalResult = buildDynamicAgentInboundBody({
+        agentId: "wecom-default-dm-remove-noteuser",
+        commandBody: "hello",
+        isCommand: false,
+      });
+      expect(normalResult.modelInputBody).toContain("removed: remove-me");
+      expect(normalResult.modelInputBody).toContain("hello");
+    });
+  });
+
+  test("does not emit added notes for pre-existing skills after startup", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const cfg = createConfig();
+    const runtime = createRuntime();
+
+    fs.mkdirSync(path.join(root, "workspace-first", "skills", "existing-skill"), {
+      recursive: true,
+    });
+    fs.writeFileSync(path.join(root, "workspace-first", "AGENTS.md"), "base agents");
+    fs.writeFileSync(
+      path.join(root, "workspace-first", "skills", "existing-skill", "SKILL.md"),
+      ["---", "name: existing-skill", "description: Existing", "---", "", "body"].join("\n"),
+    );
+
+    prepareDynamicAgentRuntime({
+      dynamicAgentId: "wecom-default-dm-existing-noteuser",
+      sourceAgentId: "wecom-first",
+      config: cfg,
+      runtime,
+    });
+
+    const normalResult = buildDynamicAgentInboundBody({
+      agentId: "wecom-default-dm-existing-noteuser",
+      commandBody: "hello",
+      isCommand: false,
+    });
+    expect(normalResult.modelInputBody).toBe("hello");
+  });
+
+  test("includes updated skill in the next runtime note", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    const cfg = createConfig();
+    const runtime = createRuntime();
+
+    fs.mkdirSync(path.join(root, "workspace-first", "skills", "update-me"), {
+      recursive: true,
+    });
+    fs.writeFileSync(path.join(root, "workspace-first", "AGENTS.md"), "base agents");
+    fs.writeFileSync(
+      path.join(root, "workspace-first", "skills", "update-me", "SKILL.md"),
+      ["---", "name: update-me", "description: before", "---", "", "body"].join("\n"),
+    );
+
+    prepareDynamicAgentRuntime({
+      dynamicAgentId: "wecom-default-dm-update-noteuser",
+      sourceAgentId: "wecom-first",
+      config: cfg,
+      runtime,
+    });
+
+    const warmup = buildDynamicAgentInboundBody({
+      agentId: "wecom-default-dm-update-noteuser",
+      commandBody: "warmup",
+      isCommand: false,
+    });
+    expect(warmup.modelInputBody).toBe("warmup");
+
+    fs.writeFileSync(
+      path.join(root, "workspace-wecom-default-dm-update-noteuser", "skills", "update-me", "SKILL.md"),
+      ["---", "name: update-me", "description: after", "---", "", "body updated"].join("\n"),
+    );
+
+    await vi.waitFor(() => {
+      const normalResult = buildDynamicAgentInboundBody({
+        agentId: "wecom-default-dm-update-noteuser",
+        commandBody: "hello",
+        isCommand: false,
+      });
+      expect(normalResult.modelInputBody).toContain("updated: update-me");
+      expect(normalResult.modelInputBody).toContain("hello");
+    });
+  });
 });

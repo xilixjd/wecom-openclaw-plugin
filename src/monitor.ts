@@ -383,6 +383,15 @@ async function buildMessageContext(
     commandBody: messageBody,
     isCommand,
   });
+  if (
+    !isCommand &&
+    modelInputBody !== commandBody &&
+    modelInputBody.includes("[Runtime note: workspace skills changed]")
+  ) {
+    runtime?.log?.(
+      `[wecom][dynamic-skills] runtime note injected for agent=${route.agentId}, messageId=${body.msgid}`,
+    );
+  }
 
   // 构建多媒体数组
   const mediaPaths = relocatedMediaList.length > 0 ? relocatedMediaList.map((m) => m.path) : undefined;
@@ -398,6 +407,8 @@ async function buildMessageContext(
   // 构建标准消息上下文
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: modelInputBody,
+    BodyForAgent: modelInputBody,
+    BodyForCommands: commandBody,
     RawBody: commandBody,
     CommandBody: commandBody,
 
