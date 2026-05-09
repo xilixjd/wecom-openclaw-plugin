@@ -1,6 +1,6 @@
 {
   "name": "@wecom/wecom-openclaw-plugin-fork",
-  "version": "2026.4.10",
+  "version": "2026.4.11",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -66,6 +66,9 @@
     "file-type": "^21.3.0",
     "undici": "^7.24.6",
     "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.28"
   },
   "devDependencies": {
     "openclaw": ">=2026.3.28",
