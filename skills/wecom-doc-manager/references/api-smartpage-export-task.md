@@ -1,17 +1,17 @@
 # smartpage_export_task API
 
-发起智能主页内容导出任务。该接口为异步操作的第一步，调用后返回 `task_id`，需配合 `smartpage_get_export_result` 轮询获取导出结果。
+发起智能文档（原智能主页）内容导出任务。该接口为异步操作的第一步，调用后返回 `task_id`，需配合 `smartpage_get_export_result` 轮询获取导出结果。
 
 ## 技能定义
 
 ```json
 {
     "name": "smartpage_export_task",
-    "description": "发起智能主页内容导出任务（异步）。传入 docid 和 content_type，返回 task_id。需配合 smartpage_get_export_result 轮询查询导出进度，直到任务完成后获取导出文件路径。",
+    "description": "发起智能文档（原智能主页）内容导出任务（异步）。传入 docid 和 content_type，返回 task_id。需配合 smartpage_get_export_result 轮询查询导出进度，直到任务完成后获取导出文件路径。",
     "inputSchema": {
         "properties": {
             "docid": {
-                "description": "智能主页的 docid，由 smartpage_create 返回",
+                "description": "智能文档的 docid，由 smartpage_create 返回",
                 "title": "Doc ID",
                 "type": "string"
             },
@@ -33,7 +33,7 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| docid | string | 是 | 智能主页的 docid |
+| docid | string | 是 | 智能文档的 docid |
 | content_type | integer | 是 | 导出内容格式：0-Text，1-Markdown |
 
 ## 请求示例

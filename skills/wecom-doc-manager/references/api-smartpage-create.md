@@ -1,17 +1,17 @@
 # smartpage_create API
 
-创建智能主页。支持传入多个子页面，每个子页面可指定标题、内容类型和文件路径。创建成功后返回文档访问链接和 docid。
+创建智能文档（原智能主页）。支持传入多个子页面，每个子页面可指定标题、内容类型和文件路径。创建成功后返回文档访问链接和 docid。
 
 ## 技能定义
 
 ```json
 {
     "name": "smartpage_create",
-    "description": "创建智能主页。支持传入标题和多个子页面配置，每个子页面可指定标题、内容类型（Text/Markdown）和本地文件路径。创建成功后返回 docid 和 url（docid 仅在创建时返回，需妥善保存）。",
+    "description": "创建智能文档（原智能主页）。支持传入标题和多个子页面配置，每个子页面可指定标题、内容类型（Text/Markdown）和本地文件路径。创建成功后返回 docid 和 url（docid 仅在创建时返回，需妥善保存）。",
     "inputSchema": {
         "properties": {
             "title": {
-                "description": "智能主页标题",
+                "description": "智能文档标题",
                 "title": "Title",
                 "type": "string"
             },
@@ -54,7 +54,7 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| title | string | 否 | 智能主页标题 |
+| title | string | 否 | 智能文档标题 |
 | pages | array | 是 | 子页面列表 |
 | pages[].page_title | string | 否 | 子页面标题 |
 | pages[].content_type | integer | 否 | 内容类型：1-Markdown，0-Text（纯文本）。**默认应传 1**，仅纯文本内容才传 0 |

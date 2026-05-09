@@ -22,7 +22,7 @@ import {
   listWeComAccountIds,
   resolveWeComAccountMulti,
 } from "../accounts.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 
 // ============================================================================
 // 类型定义
@@ -51,7 +51,7 @@ interface JsonRpcResponse {
 /**
  * Streamable HTTP 会话信息
  *
- * 每个 MCP Server category 维护一个独立的会话，包含：
+ * 每个 accountId + category 组合维护一个独立的会话，包含：
  * - sessionId: 服务端通过 Mcp-Session-Id 响应头返回的会话标识
  * - initialized: 是否已完成 initialize 握手
  * - stateless: 服务端未返回 Mcp-Session-Id 时标记为无状态模式，后续请求跳过 session 管理
@@ -74,6 +74,31 @@ export const MEDIA_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 /** 日志前缀 */
 const LOG_TAG = "[mcp]";
+
+/** 请求 MCP Server 时透传可信企业微信 userid 的 header 名 */
+export const WECOM_USERID_HEADER = "x-openclaw-wecom-userid";
+
+/**
+ * 构造 MCP 请求使用的 User-Agent
+ *
+ * 格式：`OpenClawPlugin/<version> <platform>/<arch>`
+ * 例如：`OpenClawPlugin/0.1.3 linux/x86_64`
+ *
+ * 说明：
+ * - version: 取自 package.json 的 PLUGIN_VERSION
+ * - platform: process.platform（linux / darwin / win32 ...）
+ * - arch: 将 Node 的 `x64` 归一化为传统 Unix 风格 `x86_64`，其他架构原样返回
+ */
+function buildUserAgent(): string {
+  const archMap: Record<string, string> = {
+    x64: "x86_64",
+    ia32: "i386",
+  };
+  const arch = archMap[process.arch] ?? process.arch;
+  return `OpenClawPlugin/${PLUGIN_VERSION} ${process.platform}/${arch}`;
+}
+
+const MCP_USER_AGENT = buildUserAgent();
 
 /**
  * MCP JSON-RPC 错误
@@ -121,16 +146,26 @@ export class McpHttpError extends Error {
  */
 const CACHE_CLEAR_ERROR_CODES = new Set([-32001, -32002, -32003]);
 
-/** MCP 配置缓存：category → response.body（完整配置） */
+/**
+ * 生成多账号感知的缓存 key
+ *
+ * 不同账号的同一 category 对应不同的 MCP Server（URL、凭据均不同），
+ * 必须用 accountId:category 的复合键隔离，避免跨账号缓存污染。
+ */
+function cacheKey(accountId: string, category: string): string {
+  return `${accountId}:${category}`;
+}
+
+/** MCP 配置缓存：accountId:category → response.body（完整配置） */
 const mcpConfigCache = new Map<string, Record<string, unknown>>();
 
-/** Streamable HTTP 会话缓存：category → session */
+/** Streamable HTTP 会话缓存：accountId:category → session */
 const mcpSessionCache = new Map<string, McpSession>();
 
-/** 已确认为无状态的 MCP Server 品类集合（跳过后续握手） */
+/** 已确认为无状态的 MCP Server 集合（跳过后续握手），key 为 accountId:category */
 const statelessCategories = new Set<string>();
 
-/** 正在进行中的 initialize 请求（防止并发重复初始化），key 为 category */
+/** 正在进行中的 initialize 请求（防止并发重复初始化），key 为 accountId:category */
 const inflightInitRequests = new Map<string, Promise<McpSession>>();
 
 // ============================================================================
@@ -183,7 +218,7 @@ function resolveMcpAccountId(cfg: OpenClawConfig): string | null {
  * 2. 第一个配置了 botId + secret 的长连接账户
  * 3. 无可用长连接账户时回退到默认账户（会导致后续 WSClient 获取失败）
  */
-function resolveCurrentAccountId(): string {
+export function resolveCurrentAccountId(): string {
   try {
     const core = getWeComRuntime();
     const cfg = core.config.loadConfig();
@@ -207,13 +242,11 @@ function resolveCurrentAccountId(): string {
 /**
  * 通过 WSClient 拉取指定 category 的 MCP 完整配置
  *
- * 自动根据 defaultAccount 配置获取对应账户的 WSClient，无需手动传入 accountId。
- *
+ * @param accountId - 账户 ID，决定使用哪个 WSClient
  * @param category - MCP 品类名称，如 doc、contact
  * @returns 完整的 response.body 配置对象（至少包含 url 字段）
  */
-async function fetchMcpConfig(category: string): Promise<Record<string, unknown>> {
-  const accountId = resolveCurrentAccountId();
+async function fetchMcpConfig(accountId: string, category: string): Promise<Record<string, unknown>> {
   const wsClient = getWeComWebSocket(accountId);
   if (!wsClient) {
     throw new Error(`WSClient 未连接 (accountId="${accountId}")，无法拉取 MCP 配置`);
@@ -253,21 +286,24 @@ async function fetchMcpConfig(category: string): Promise<Record<string, unknown>
  *
  * 优先从内存缓存中读取，未命中时通过 WSClient 拉取并缓存。
  *
+ * @param accountId - 账户 ID
  * @param category - MCP 品类名称
  * @returns MCP Server URL
  */
-async function getMcpUrl(category: string): Promise<string> {
+async function getMcpUrl(accountId: string, category: string): Promise<string> {
+  const key = cacheKey(accountId, category);
+
   // 查内存缓存
-  const cached = mcpConfigCache.get(category);
+  const cached = mcpConfigCache.get(key);
   if (cached) return cached.url as string;
 
   // 缓存未命中，通过 WSClient 拉取
-  const body = await fetchMcpConfig(category);
+  const body = await fetchMcpConfig(accountId, category);
 
   // 写入缓存
-  mcpConfigCache.set(category, body);
+  mcpConfigCache.set(key, body);
 
-  console.log(`${LOG_TAG} getMcpUrl ${category}: ${body.url}`);
+  console.log(`${LOG_TAG} getMcpUrl ${accountId}/${category}: ${body.url}`);
 
   return body.url as string;
 }
@@ -287,6 +323,7 @@ async function sendRawJsonRpc(
   session: McpSession,
   body: JsonRpcRequest,
   timeoutMs: number = HTTP_REQUEST_TIMEOUT_MS,
+  requesterUserId?: string,
 ): Promise<{ response: Response; rpcResult: unknown; newSessionId: string | null }> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -294,11 +331,20 @@ async function sendRawJsonRpc(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
+    "User-Agent": MCP_USER_AGENT,
   };
   // Streamable HTTP：携带会话 ID
   if (session.sessionId) {
     headers["Mcp-Session-Id"] = session.sessionId;
   }
+  const normalizedRequesterUserId = requesterUserId?.trim();
+  if (normalizedRequesterUserId) {
+    headers[WECOM_USERID_HEADER] = normalizedRequesterUserId;
+  }
+
+  console.log(
+    `${LOG_TAG} sendRawJsonRpc → ${body.method} | ${WECOM_USERID_HEADER}: ${headers[WECOM_USERID_HEADER] ?? "(not set)"}`,
+  );
 
   let response: Response;
   try {
@@ -367,10 +413,16 @@ async function sendRawJsonRpc(
  * 发送 initialize → 接收 serverInfo → 发送 initialized 通知。
  * 如果服务端未返回 Mcp-Session-Id，则标记为无状态模式，后续请求跳过 session 管理。
  */
-async function initializeSession(url: string, category: string): Promise<McpSession> {
+async function initializeSession(
+  url: string,
+  accountId: string,
+  category: string,
+  requesterUserId?: string,
+): Promise<McpSession> {
+  const key = cacheKey(accountId, category);
   const session: McpSession = { sessionId: null, initialized: false, stateless: false };
 
-  console.log(`${LOG_TAG} 开始 initialize 握手 (category="${category}")`);
+  console.log(`${LOG_TAG} 开始 initialize 握手 (accountId="${accountId}", category="${category}")`);
 
   // 1. 发送 initialize 请求
   const initBody: JsonRpcRequest = {
@@ -384,7 +436,13 @@ async function initializeSession(url: string, category: string): Promise<McpSess
     },
   };
 
-  const { newSessionId: initSessionId } = await sendRawJsonRpc(url, session, initBody);
+  const { newSessionId: initSessionId } = await sendRawJsonRpc(
+    url,
+    session,
+    initBody,
+    HTTP_REQUEST_TIMEOUT_MS,
+    requesterUserId,
+  );
 
   // 用返回的 newSessionId 更新 session（不再依赖副作用修改）
   if (initSessionId) {
@@ -396,9 +454,9 @@ async function initializeSession(url: string, category: string): Promise<McpSess
   if (!session.sessionId) {
     session.stateless = true;
     session.initialized = true;
-    statelessCategories.add(category);
-    mcpSessionCache.set(category, session);
-    console.log(`${LOG_TAG} 无状态 Server 确认 (category="${category}")`);
+    statelessCategories.add(key);
+    mcpSessionCache.set(key, session);
+    console.log(`${LOG_TAG} 无状态 Server 确认 (accountId="${accountId}", category="${category}")`);
     return session;
   }
 
@@ -408,7 +466,13 @@ async function initializeSession(url: string, category: string): Promise<McpSess
     method: "notifications/initialized",
   };
   // initialized 通知不需要等待响应，但 Streamable HTTP 要求通过 POST 发送
-  const { newSessionId: notifySessionId } = await sendRawJsonRpc(url, session, notifyBody);
+  const { newSessionId: notifySessionId } = await sendRawJsonRpc(
+    url,
+    session,
+    notifyBody,
+    HTTP_REQUEST_TIMEOUT_MS,
+    requesterUserId,
+  );
 
   // 如果 initialized 通知的响应也携带了 sessionId，以最新的为准
   if (notifySessionId) {
@@ -416,8 +480,8 @@ async function initializeSession(url: string, category: string): Promise<McpSess
   }
 
   session.initialized = true;
-  mcpSessionCache.set(category, session);
-  console.log(`${LOG_TAG} 有状态 Session 建立成功 (category="${category}", sessionId="${session.sessionId}")`);
+  mcpSessionCache.set(key, session);
+  console.log(`${LOG_TAG} 有状态 Session 建立成功 (accountId="${accountId}", category="${category}", sessionId="${session.sessionId}")`);
   return session;
 }
 
@@ -428,25 +492,32 @@ async function initializeSession(url: string, category: string): Promise<McpSess
  * - 已有可用有状态会话：直接返回缓存
  * - 其他情况：执行 initialize 握手，并发请求会被合并
  */
-async function getOrCreateSession(url: string, category: string): Promise<McpSession> {
+async function getOrCreateSession(
+  url: string,
+  accountId: string,
+  category: string,
+  requesterUserId?: string,
+): Promise<McpSession> {
+  const key = cacheKey(accountId, category);
+
   // 已确认为无状态的 Server，直接返回空 session 跳过握手
-  if (statelessCategories.has(category)) {
-    const cached = mcpSessionCache.get(category);
+  if (statelessCategories.has(key)) {
+    const cached = mcpSessionCache.get(key);
     if (cached) return cached;
     // 首次发现被清除（理论上不会走到这里），重新走握手探测
   }
 
-  const cached = mcpSessionCache.get(category);
+  const cached = mcpSessionCache.get(key);
   if (cached?.initialized) return cached;
 
   // 防止并发重复初始化
-  const inflight = inflightInitRequests.get(category);
+  const inflight = inflightInitRequests.get(key);
   if (inflight) return inflight;
 
-  const promise = initializeSession(url, category).finally(() => {
-    inflightInitRequests.delete(category);
+  const promise = initializeSession(url, accountId, category, requesterUserId).finally(() => {
+    inflightInitRequests.delete(key);
   });
-  inflightInitRequests.set(category, promise);
+  inflightInitRequests.set(key, promise);
   return promise;
 }
 
@@ -513,18 +584,44 @@ async function parseSseResponse(response: Response): Promise<unknown> {
 // ============================================================================
 
 /**
- * 清理指定品类的所有 MCP 缓存（配置、会话、无状态标记）
+ * 清理指定账户+品类的所有 MCP 缓存（配置、会话、无状态标记）
  *
  * 当 MCP Server 返回特定错误码时调用，确保下次请求重新拉取配置并重建会话。
  *
+ * @param accountId - 账户 ID
  * @param category - MCP 品类名称
  */
-export function clearCategoryCache(category: string): void {
-  console.log(`${LOG_TAG} 清理缓存 (category="${category}")`);
-  mcpConfigCache.delete(category);
-  mcpSessionCache.delete(category);
-  statelessCategories.delete(category);
-  inflightInitRequests.delete(category);
+export function clearCategoryCache(accountId: string, category: string): void {
+  const key = cacheKey(accountId, category);
+  console.log(`${LOG_TAG} 清理缓存 (accountId="${accountId}", category="${category}")`);
+  mcpConfigCache.delete(key);
+  mcpSessionCache.delete(key);
+  statelessCategories.delete(key);
+  inflightInitRequests.delete(key);
+}
+
+/**
+ * 清理指定账户下所有品类的 MCP 缓存
+ *
+ * 适用于账户掉线、凭据变更等需要整体清理的场景。
+ *
+ * @param accountId - 账户 ID
+ */
+export function clearAccountCache(accountId: string): void {
+  const prefix = `${accountId}:`;
+  console.log(`${LOG_TAG} 清理账户所有缓存 (accountId="${accountId}")`);
+  for (const key of mcpConfigCache.keys()) {
+    if (key.startsWith(prefix)) mcpConfigCache.delete(key);
+  }
+  for (const key of mcpSessionCache.keys()) {
+    if (key.startsWith(prefix)) mcpSessionCache.delete(key);
+  }
+  for (const key of statelessCategories) {
+    if (key.startsWith(prefix)) statelessCategories.delete(key);
+  }
+  for (const key of inflightInitRequests.keys()) {
+    if (key.startsWith(prefix)) inflightInitRequests.delete(key);
+  }
 }
 
 /** tools/list 返回的工具描述 */
@@ -538,6 +635,10 @@ export interface McpToolInfo {
 export interface SendJsonRpcOptions {
   /** 自定义 HTTP 请求超时时间（毫秒），默认使用 HTTP_REQUEST_TIMEOUT_MS */
   timeoutMs?: number;
+  /** 当前会话可信的企业微信 userid，有值时会注入自定义 header */
+  requesterUserId?: string;
+  /** 指定使用的账户 ID，有值时优先使用，否则 fallback 到 resolveCurrentAccountId() */
+  accountId?: string;
 }
 
 /**
@@ -547,10 +648,13 @@ export interface SendJsonRpcOptions {
  * - 无状态 Server：跳过 session 管理，直接发送请求
  * - 有状态 Server：首次调用先执行 initialize 握手，session 失效（404）时自动重建并重试
  *
+ * accountId 优先使用 options.accountId（由工具工厂从 ctx.agentAccountId 传入），
+ * 未提供时 fallback 到 resolveCurrentAccountId()。解析结果贯穿整条调用链，避免跨账号污染。
+ *
  * @param category - MCP 品类名称
  * @param method - JSON-RPC 方法名
  * @param params - JSON-RPC 参数
- * @param options - 可选配置（如自定义超时）
+ * @param options - 可选配置（如自定义超时、指定账户）
  * @returns JSON-RPC result
  */
 export async function sendJsonRpc(
@@ -559,8 +663,11 @@ export async function sendJsonRpc(
   params?: Record<string, unknown>,
   options?: SendJsonRpcOptions,
 ): Promise<unknown> {
-  const url = await getMcpUrl(category);
+  const accountId = options?.accountId?.trim() || resolveCurrentAccountId();
+  const key = cacheKey(accountId, category);
+  const url = await getMcpUrl(accountId, category);
   const timeoutMs = options?.timeoutMs;
+  const requesterUserId = options?.requesterUserId;
 
   const body: JsonRpcRequest = {
     jsonrpc: "2.0",
@@ -569,10 +676,16 @@ export async function sendJsonRpc(
     ...(params !== undefined ? { params } : {}),
   };
 
-  let session = await getOrCreateSession(url, category);
+  let session = await getOrCreateSession(url, accountId, category, requesterUserId);
 
   try {
-    const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body, timeoutMs);
+    const { rpcResult, newSessionId } = await sendRawJsonRpc(
+      url,
+      session,
+      body,
+      timeoutMs,
+      requesterUserId,
+    );
     // 用最新的 sessionId 更新 session
     if (newSessionId) {
       session.sessionId = newSessionId;
@@ -581,7 +694,7 @@ export async function sendJsonRpc(
   } catch (err) {
     // 特定 JSON-RPC 错误码触发缓存清理（统一在传输层处理，上层无需关心）
     if (err instanceof McpRpcError && CACHE_CLEAR_ERROR_CODES.has(err.code)) {
-      clearCategoryCache(category);
+      clearCategoryCache(accountId, category);
     }
 
     // 无状态 Server 不存在 session 失效问题，直接抛出错误
@@ -590,12 +703,18 @@ export async function sendJsonRpc(
     // 有状态 Server：session 失效时服务端返回 404，需要重新初始化并重试一次
     // 使用 McpHttpError.statusCode 精确匹配，避免字符串匹配 "404" 导致误判
     if (err instanceof McpHttpError && err.statusCode === 404) {
-      console.log(`${LOG_TAG} Session 失效 (category="${category}")，开始重建...`);
-      mcpSessionCache.delete(category);
+      console.log(`${LOG_TAG} Session 失效 (accountId="${accountId}", category="${category}")，开始重建...`);
+      mcpSessionCache.delete(key);
 
       // 使用 rebuildSession 合并并发的 session 重建请求，避免竞态条件
-      session = await rebuildSession(url, category);
-      const { rpcResult, newSessionId } = await sendRawJsonRpc(url, session, body, timeoutMs);
+      session = await rebuildSession(url, accountId, category, requesterUserId);
+      const { rpcResult, newSessionId } = await sendRawJsonRpc(
+        url,
+        session,
+        body,
+        timeoutMs,
+        requesterUserId,
+      );
       if (newSessionId) {
         session.sessionId = newSessionId;
       }
@@ -603,7 +722,7 @@ export async function sendJsonRpc(
     }
 
     // 其他错误记录日志后抛出
-    console.error(`${LOG_TAG} RPC 请求失败 (category="${category}", method="${method}"): ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`${LOG_TAG} RPC 请求失败 (accountId="${accountId}", category="${category}", method="${method}"): ${err instanceof Error ? err.message : String(err)}`);
     throw err;
   }
 }
@@ -614,13 +733,19 @@ export async function sendJsonRpc(
  * 与 getOrCreateSession 类似，使用 inflightInitRequests 防止
  * 多个并发请求同时遇到 404 时重复执行 initialize 握手。
  */
-async function rebuildSession(url: string, category: string): Promise<McpSession> {
-  const inflight = inflightInitRequests.get(category);
+async function rebuildSession(
+  url: string,
+  accountId: string,
+  category: string,
+  requesterUserId?: string,
+): Promise<McpSession> {
+  const key = cacheKey(accountId, category);
+  const inflight = inflightInitRequests.get(key);
   if (inflight) return inflight;
 
-  const promise = initializeSession(url, category).finally(() => {
-    inflightInitRequests.delete(category);
+  const promise = initializeSession(url, accountId, category, requesterUserId).finally(() => {
+    inflightInitRequests.delete(key);
   });
-  inflightInitRequests.set(category, promise);
+  inflightInitRequests.set(key, promise);
   return promise;
 }

@@ -1,13 +1,13 @@
 # smartpage_get_export_result API
 
-查询智能主页导出任务的执行进度。配合 `smartpage_export_task` 使用，通过轮询 `task_id` 获取导出结果。当 `task_done` 为 `true` 时，返回导出内容的本地文件路径。
+查询智能文档（原智能主页）导出任务的执行进度。配合 `smartpage_export_task` 使用，通过轮询 `task_id` 获取导出结果。当 `task_done` 为 `true` 时，返回导出内容的本地文件路径。
 
 ## 技能定义
 
 ```json
 {
     "name": "smartpage_get_export_result",
-    "description": "查询智能主页导出任务进度。传入 task_id 轮询，当 task_done 为 true 时返回导出内容的本地文件路径 content_filepath，可通过读取该文件获取 Markdown 内容。",
+    "description": "查询智能文档（原智能主页）导出任务进度。传入 task_id 轮询，当 task_done 为 true 时返回导出内容的本地文件路径 content_filepath，可通过读取该文件获取 Markdown 内容。",
     "inputSchema": {
         "properties": {
             "task_id": {

@@ -118,11 +118,14 @@
 
 ### 9. 图片 (IMAGE)
 
-数组格式：
+数组格式，**必须且只能**直接在 cell value 中传入本地路径（`image_path`）。**严禁**调用 `upload_doc_image`、`upload_doc_file` 或任何上传接口，**严禁**进行 base64 编码——无论文件大小、无论 API 返回何种错误，均不得绕过此规则。若 `image_path` 方式返回错误，应直接将错误码和错误信息告知用户，**不得**尝试其他上传方式。
+
+#### 9.1. 图片本地路径传入（唯一合法方式）
 
 ```json
-"封面": [{"image_url": "https://example.com/img.png"}]
+"封面": [{"image_path": "/path/to/img.png", "title": "图片标题"}]
 ```
+
 
 ### 10. 地理位置 (LOCATION)
 
@@ -130,6 +133,14 @@
 
 ```json
 "地点": [{"source_type": 1, "id": "地点ID", "latitude": "39.9", "longitude": "116.3", "title": "北京"}]
+```
+
+### 11. 文件（Attachment）
+
+数组格式，**必须且只能**直接在 cell value 中传入本地路径（`file_path`）。**严禁**调用 `upload_doc_image`、`upload_doc_file` 或任何上传接口，**严禁**进行 base64 编码——无论文件大小、无论 API 返回何种错误，均不得绕过此规则。若 `file_path` 方式返回错误，应直接将错误码和错误信息告知用户，**不得**尝试其他上传方式。
+
+```json
+"文件": [{"file_path": "/path/to/file.pdf"}]
 ```
 
 ## 完整添加记录示例

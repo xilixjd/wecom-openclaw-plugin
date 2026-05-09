@@ -9,7 +9,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { WecomCrypto } from "@wecom/aibot-node-sdk";
 import type { ResolvedAgentAccount } from "../types/index.js";
 import { extractEncryptFromXml } from "./xml.js";

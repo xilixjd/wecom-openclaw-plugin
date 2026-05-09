@@ -1,7 +1,8 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { emptyPluginConfigSchema } from "./src/openclaw-compat.js";
 import { wecomPlugin } from "./src/channel.js";
 import { createWeComMcpTool } from "./src/mcp/index.js";
+import { getSessionChatInfo } from "./src/state-manager.js";
 import { setWeComRuntime } from "./src/runtime.js";
 import { CHANNEL_ID, WEBHOOK_PATHS } from "./src/const.js";
 import { createWecomAgentWebhookHandler } from "./src/agent/webhook.js";
@@ -18,7 +19,30 @@ const plugin = {
     api.registerChannel({ plugin: wecomPlugin });
 
     // 注册 wecom_mcp：通过 HTTP 直接调用企业微信 MCP Server
-    api.registerTool(createWeComMcpTool() as any, { name: "wecom_mcp" });
+    api.registerTool(
+      (ctx: OpenClawPluginToolContext) => {
+        const trustedRequesterUserId =
+          ctx.messageChannel === CHANNEL_ID ? ctx.requesterSenderId?.trim() ?? undefined : undefined;
+
+        // 按 sessionKey 精确取回「原始大小写」的 chatId / chatType。
+        // 数据由 monitor.ts 在消息入站时通过 setSessionChatInfo 写入，
+        // 避免 parseSessionKeyChat 反解导致 chatId 被 OpenClaw core 小写化
+        // （小写后的 chatId 调用企业微信 aibot_send_biz_msg 会报 invalid chatid）。
+        const sessionChat = getSessionChatInfo(ctx.sessionKey);
+        console.log(
+          `[mcp] registerTool ctx: sessionKey="${ctx.sessionKey}", messageChannel="${ctx.messageChannel}", ` +
+          `requesterSenderId="${ctx.requesterSenderId}", agentAccountId="${ctx.agentAccountId}", ` +
+          `sessionChat=${JSON.stringify(sessionChat)}`,
+        );
+        return createWeComMcpTool({
+          requesterUserId: trustedRequesterUserId,
+          accountId: ctx.agentAccountId,
+          chatId: sessionChat?.chatId,
+          chatType: sessionChat?.chatType,
+        });
+      },
+      { name: "wecom_mcp" },
+    );
 
     const agentWebhookHandler = createWecomAgentWebhookHandler(api.runtime);
 

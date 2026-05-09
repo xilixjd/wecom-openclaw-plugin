@@ -11,7 +11,7 @@
  * - 按 accountId 管理各自的 unregister，stop 时只注销该账号的 Target
  */
 
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { WebhookGatewayContext, WecomWebhookTarget, PendingInbound } from "./types.js";
 import { PRUNE_INTERVAL_MS, WEBHOOK_PATHS } from "./types.js";
 import { monitorState, WebhookMonitorState } from "./state.js";

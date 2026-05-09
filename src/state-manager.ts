@@ -16,6 +16,52 @@ import {
 } from "./const.js";
 
 // ============================================================================
+// 全局单例状态（通过 globalThis + Symbol.for 确保跨 jiti loader 实例共享）
+//
+// 问题背景：openclaw 框架在不同阶段（主加载、configSchema 加载等）会创建
+// 多个独立的 jiti loader 实例，每个实例有独立的模块缓存（parentCache），
+// 导致本模块被多次实例化，模块级变量不共享。
+// 使用 globalThis + Symbol.for 可以确保同一进程内只有一份状态。
+// ============================================================================
+
+/** 全局共享状态的唯一键 */
+const SHARED_STATE_KEY = Symbol.for("wecom-openclaw-plugin:shared-state:v1");
+
+/** 消息状态条目（带创建时间戳，用于 TTL 清理） */
+interface MessageStateEntry {
+  state: MessageState;
+  createdAt: number;
+}
+
+/** 全局共享状态结构 */
+interface SharedState {
+  wsClientInstances: Map<string, WSClient>;
+  messageStates: Map<string, MessageStateEntry>;
+  cleanupTimer: ReturnType<typeof setInterval> | null;
+  reqIdStores: Map<string, PersistentReqIdStore>;
+}
+
+/**
+ * 获取或创建全局共享状态（进程内单例）
+ */
+function getSharedState(): SharedState {
+  const existing = (globalThis as Record<symbol, SharedState | undefined>)[SHARED_STATE_KEY];
+  if (existing) return existing;
+
+  const state: SharedState = {
+    wsClientInstances: new Map(),
+    messageStates: new Map(),
+    cleanupTimer: null,
+    reqIdStores: new Map(),
+  };
+  (globalThis as Record<symbol, SharedState>)[SHARED_STATE_KEY] = state;
+  return state;
+}
+
+/** 进程内唯一的共享状态 */
+const shared = getSharedState();
+
+// ============================================================================
 // WSClient 实例管理
 // ============================================================================
 
@@ -27,52 +73,42 @@ const wsClientInstances: Map<string, WSClient> = ((globalThis as Record<string, 
  * 获取指定账户的 WSClient 实例
  */
 export function getWeComWebSocket(accountId: string): WSClient | null {
-  return wsClientInstances.get(accountId) ?? null;
+  return shared.wsClientInstances.get(accountId) ?? null;
 }
 
 /**
  * 设置指定账户的 WSClient 实例
  */
 export function setWeComWebSocket(accountId: string, client: WSClient): void {
-  wsClientInstances.set(accountId, client);
+  shared.wsClientInstances.set(accountId, client);
 }
 
 /**
  * 删除指定账户的 WSClient 实例
  */
 export function deleteWeComWebSocket(accountId: string): void {
-  wsClientInstances.delete(accountId);
+  shared.wsClientInstances.delete(accountId);
 }
 
 // ============================================================================
 // 消息状态管理（带 TTL 清理，防止内存泄漏）
 // ============================================================================
 
-/** 消息状态条目（带创建时间戳，用于 TTL 清理） */
-interface MessageStateEntry {
-  state: MessageState;
-  createdAt: number;
-}
-
-/** 消息状态管理 */
-const messageStates = new Map<string, MessageStateEntry>();
-
-/** 定期清理定时器 */
-let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+// MessageStateEntry 接口已在上方 SharedState 定义处声明
 
 /**
  * 启动消息状态定期清理（自动 TTL 清理 + 容量限制）
  */
 export function startMessageStateCleanup(): void {
-  if (cleanupTimer) return;
+  if (shared.cleanupTimer) return;
 
-  cleanupTimer = setInterval(() => {
+  shared.cleanupTimer = setInterval(() => {
     pruneMessageStates();
   }, MESSAGE_STATE_CLEANUP_INTERVAL_MS);
 
   // 允许进程退出时不阻塞
-  if (cleanupTimer && typeof cleanupTimer === "object" && "unref" in cleanupTimer) {
-    cleanupTimer.unref();
+  if (shared.cleanupTimer && typeof shared.cleanupTimer === "object" && "unref" in shared.cleanupTimer) {
+    shared.cleanupTimer.unref();
   }
 }
 
@@ -80,9 +116,9 @@ export function startMessageStateCleanup(): void {
  * 停止消息状态定期清理
  */
 export function stopMessageStateCleanup(): void {
-  if (cleanupTimer) {
-    clearInterval(cleanupTimer);
-    cleanupTimer = null;
+  if (shared.cleanupTimer) {
+    clearInterval(shared.cleanupTimer);
+    shared.cleanupTimer = null;
   }
 }
 
@@ -93,18 +129,18 @@ function pruneMessageStates(): void {
   const now = Date.now();
 
   // 1. 清理过期条目
-  for (const [key, entry] of messageStates) {
+  for (const [key, entry] of shared.messageStates) {
     if (now - entry.createdAt >= MESSAGE_STATE_TTL_MS) {
-      messageStates.delete(key);
+      shared.messageStates.delete(key);
     }
   }
 
   // 2. 容量限制：如果仍超过最大条目数，按时间淘汰最旧的
-  if (messageStates.size > MESSAGE_STATE_MAX_SIZE) {
-    const sorted = [...messageStates.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
-    const toRemove = sorted.slice(0, messageStates.size - MESSAGE_STATE_MAX_SIZE);
+  if (shared.messageStates.size > MESSAGE_STATE_MAX_SIZE) {
+    const sorted = [...shared.messageStates.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
+    const toRemove = sorted.slice(0, shared.messageStates.size - MESSAGE_STATE_MAX_SIZE);
     for (const [key] of toRemove) {
-      messageStates.delete(key);
+      shared.messageStates.delete(key);
     }
   }
 }
@@ -113,7 +149,7 @@ function pruneMessageStates(): void {
  * 设置消息状态
  */
 export function setMessageState(messageId: string, state: MessageState): void {
-  messageStates.set(messageId, {
+  shared.messageStates.set(messageId, {
     state,
     createdAt: Date.now(),
   });
@@ -123,12 +159,12 @@ export function setMessageState(messageId: string, state: MessageState): void {
  * 获取消息状态
  */
 export function getMessageState(messageId: string): MessageState | undefined {
-  const entry = messageStates.get(messageId);
+  const entry = shared.messageStates.get(messageId);
   if (!entry) return undefined;
 
   // 检查 TTL
   if (Date.now() - entry.createdAt >= MESSAGE_STATE_TTL_MS) {
-    messageStates.delete(messageId);
+    shared.messageStates.delete(messageId);
     return undefined;
   }
   return entry.state;
@@ -138,14 +174,14 @@ export function getMessageState(messageId: string): MessageState | undefined {
  * 删除消息状态
  */
 export function deleteMessageState(messageId: string): void {
-  messageStates.delete(messageId);
+  shared.messageStates.delete(messageId);
 }
 
 /**
  * 清空所有消息状态
  */
 export function clearAllMessageStates(): void {
-  messageStates.clear();
+  shared.messageStates.clear();
 }
 
 // ============================================================================
@@ -157,13 +193,12 @@ export function clearAllMessageStates(): void {
  * 参考 createPersistentDedupe 模式：内存 + 磁盘双层、文件锁、原子写入、TTL 过期、防抖写入
  * 重启后可从磁盘恢复，确保主动推送消息时能获取到 reqId
  */
-const reqIdStores = new Map<string, PersistentReqIdStore>();
 
 function getOrCreateReqIdStore(accountId: string): PersistentReqIdStore {
-  let store = reqIdStores.get(accountId);
+  let store = shared.reqIdStores.get(accountId);
   if (!store) {
     store = createPersistentReqIdStore(accountId);
-    reqIdStores.set(accountId, store);
+    shared.reqIdStores.set(accountId, store);
   }
   return store;
 }
@@ -227,19 +262,83 @@ export async function flushReqIdStore(accountId = "default"): Promise<void> {
 // 全局 cleanup（断开连接时释放所有资源）
 // ============================================================================
 
+// ============================================================================
+// 会话 chat 信息映射（sessionKey → ChatInfo）
+//
+// 用途：在消息入站（monitor.ts）时将「原始大小写」的 chatId 与 chatType
+//       以 OpenClaw sessionKey 为键写入，后续 registerTool 闭包里通过
+//       ctx.sessionKey 精确取回，避免依赖 parseSessionKeyChat 反解
+//       （parseSessionKeyChat 得到的 chatId 会被 OpenClaw core 小写化，
+//         不能直接传给企业微信 aibot_send_biz_msg 等大小写敏感接口）。
+//
+// 为什么用 sessionKey 而不是 userid：
+//   - sessionKey 唯一对应一个会话（账号+聊天类型+对端 ID）
+//   - userid 在并发多群/多会话场景下会被互相覆盖
+// ============================================================================
+
+/** 会话 chat 信息 */
+export interface SessionChatInfo {
+  /** 原始大小写的 chatId（群 ID 或用户 ID） */
+  chatId: string;
+  /** 聊天类型：single（单聊）或 group（群聊） */
+  chatType: "single" | "group";
+}
+
+/** sessionKey → SessionChatInfo 映射 */
+const sessionChatInfoMap = new Map<string, SessionChatInfo>();
+
+/** 容量上限，超出按插入顺序淘汰最旧项，避免长时间运行内存增长 */
+const SESSION_CHAT_INFO_MAX_SIZE = 5000;
+
+/**
+ * 记录 sessionKey 对应的原始会话信息（由 monitor.ts 在消息入站时调用）
+ */
+export function setSessionChatInfo(sessionKey: string, info: SessionChatInfo): void {
+  if (!sessionKey) return;
+
+  // 容量控制：超限时淘汰最早插入的条目（Map 保留插入顺序）
+  if (sessionChatInfoMap.size >= SESSION_CHAT_INFO_MAX_SIZE && !sessionChatInfoMap.has(sessionKey)) {
+    const oldestKey = sessionChatInfoMap.keys().next().value;
+    if (oldestKey !== undefined) {
+      sessionChatInfoMap.delete(oldestKey);
+    }
+  }
+
+  sessionChatInfoMap.set(sessionKey, info);
+}
+
+/**
+ * 获取 sessionKey 对应的原始会话信息（由 registerTool 闭包调用）
+ */
+export function getSessionChatInfo(sessionKey: string | undefined): SessionChatInfo | undefined {
+  if (!sessionKey) return undefined;
+  return sessionChatInfoMap.get(sessionKey);
+}
+
+/**
+ * 删除 sessionKey 对应的会话信息（会话结束时可选调用）
+ */
+export function deleteSessionChatInfo(sessionKey: string): void {
+  sessionChatInfoMap.delete(sessionKey);
+}
+
+// ============================================================================
+// 全局 cleanup 原始位置
+// ============================================================================
+
 /**
  * 清理指定账户的所有资源
  */
 export async function cleanupAccount(accountId: string): Promise<void> {
   // 1. 断开 WSClient
-  const wsClient = wsClientInstances.get(accountId);
+  const wsClient = shared.wsClientInstances.get(accountId);
   if (wsClient) {
     try {
       wsClient.disconnect();
     } catch {
       // 忽略断开连接时的错误
     }
-    wsClientInstances.delete(accountId);
+    shared.wsClientInstances.delete(accountId);
   }
 
   // 2. 由于移除了磁盘存储，不再需要 flush reqId 存储
@@ -254,14 +353,14 @@ export async function cleanupAll(): Promise<void> {
   stopMessageStateCleanup();
 
   // 清理所有 WSClient
-  for (const [accountId, wsClient] of wsClientInstances) {
+  for (const [accountId, wsClient] of shared.wsClientInstances) {
     try {
       wsClient.disconnect();
     } catch {
       // 忽略
     }
   }
-  wsClientInstances.clear();
+  shared.wsClientInstances.clear();
 
   // 由于移除了磁盘存储，不再需要 flush 所有 reqId 存储
 

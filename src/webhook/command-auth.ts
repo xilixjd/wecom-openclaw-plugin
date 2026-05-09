@@ -5,7 +5,7 @@
  * 适配新版 WeComConfig（dmPolicy / allowFrom 扁平化在顶层）。
  */
 
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { WeComConfig } from "../utils.js";
 
 // ============================================================================

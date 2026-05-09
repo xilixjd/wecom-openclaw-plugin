@@ -21,9 +21,9 @@ import type { CallInterceptor, CallContext } from "./types.js";
  * 这些错误码出现在 MCP 工具调用返回的 content 文本中（业务层面），
  * 与 JSON-RPC 层面的错误码不同，需要在此处额外检测。
  *
- * - 850002: 机器人未被授权使用对应能力，需清理缓存以便下次重新拉取配置
+ * - 850001/ 851014: 机器人授权过期/ 重置，需清理缓存以便下次重新拉取配置
  */
-const BIZ_CACHE_CLEAR_ERROR_CODES = new Set([850002]);
+const BIZ_CACHE_CLEAR_ERROR_CODES = new Set([850001, 851014]);
 
 // ============================================================================
 // 拦截器实现
@@ -37,7 +37,7 @@ export const bizErrorInterceptor: CallInterceptor = {
 
   /** 检查返回结果中的业务错误码，必要时清理缓存 */
   afterCall(ctx: CallContext, result: unknown): unknown {
-    checkBizErrorAndClearCache(result, ctx.category);
+    checkBizErrorAndClearCache(result, ctx);
     // 不修改 result，透传给下一个拦截器
     return result;
   },
@@ -50,7 +50,7 @@ export const bizErrorInterceptor: CallInterceptor = {
 /**
  * 检查 tools/call 的返回结果中是否包含需要清理缓存的业务错误码
  */
-function checkBizErrorAndClearCache(result: unknown, category: string): void {
+function checkBizErrorAndClearCache(result: unknown, ctx: CallContext): void {
   if (!result || typeof result !== "object") return;
 
   const { content } = result as { content?: Array<{ type: string; text?: string }> };
@@ -61,8 +61,13 @@ function checkBizErrorAndClearCache(result: unknown, category: string): void {
     try {
       const parsed = JSON.parse(item.text) as Record<string, unknown>;
       if (typeof parsed.errcode === "number" && BIZ_CACHE_CLEAR_ERROR_CODES.has(parsed.errcode)) {
-        console.log(`[mcp] 检测到业务错误码 ${parsed.errcode} (category="${category}")，清理缓存`);
-        clearCategoryCache(category);
+        const accountId = ctx.accountId;
+        if (!accountId) {
+          console.warn(`[mcp] 检测到业务错误码 ${parsed.errcode} (category="${ctx.category}")，但 ctx.accountId 为空，跳过缓存清理`);
+          return;
+        }
+        console.log(`[mcp] 检测到业务错误码 ${parsed.errcode} (accountId="${accountId}", category="${ctx.category}")，清理缓存`);
+        clearCategoryCache(accountId, ctx.category);
         return;
       }
     } catch {

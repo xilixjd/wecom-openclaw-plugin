@@ -1,5 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { CHANNEL_ID } from "./const.js";
 import type { WeComConfig, WeComAccountConfig, ResolvedWeComAccount } from "./utils.js";
 import { DefaultWsUrl } from "./utils.js";

@@ -16,6 +16,7 @@
 import { sendJsonRpc, type McpToolInfo } from "./transport.js";
 import { cleanSchemaForGemini } from "./schema.js";
 import { resolveBeforeCall, runAfterCall } from "./interceptors/index.js";
+import type { CallContext } from "./interceptors/types.js";
 
 // ============================================================================
 // 类型定义
@@ -33,6 +34,17 @@ interface WeComToolsParams {
   args?: string | Record<string, unknown>;
 }
 
+interface CreateWeComMcpToolOptions {
+  /** 当前会话可信的企业微信 userid */
+  requesterUserId?: string;
+  /** 当前会话对应的账户 ID（来自 ctx.agentAccountId） */
+  accountId?: string;
+  /** 当前会话的 chatId（群组 ID 或用户 ID），用于 aibot_send_biz_msg 等命令 */
+  chatId?: string;
+  /** 当前会话的聊天类型：single（单聊）或 group（群聊） */
+  chatType?: "single" | "group";
+}
+
 // ============================================================================
 // 响应构造辅助
 // ============================================================================
@@ -40,7 +52,13 @@ interface WeComToolsParams {
 /** 构造统一的文本响应结构 */
 const textResult = (data: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+  details: data,
 });
+
+const normalizeOptionalString = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
 
 /** 构造错误响应 */
 const errorResult = (err: unknown) => {
@@ -58,16 +76,19 @@ const errorResult = (err: unknown) => {
 // list 操作：列出某品类的所有 MCP 工具
 // ============================================================================
 
-const handleList = async (category: string): Promise<unknown> => {
-  const result = await sendJsonRpc(category, "tools/list") as { tools?: McpToolInfo[] } | undefined;
+const handleList = async (ctx: CallContext): Promise<unknown> => {
+  const result = await sendJsonRpc(ctx.category, "tools/list", undefined, {
+    requesterUserId: ctx.requesterUserId,
+    accountId: ctx.accountId,
+  }) as { tools?: McpToolInfo[] } | undefined;
 
   const tools = result?.tools ?? [];
   if (tools.length === 0) {
-    return { message: `品类 "${category}" 下暂无可用工具`, tools: [] };
+    return { message: `品类 "${ctx.category}" 下暂无可用工具`, tools: [] };
   }
 
   return {
-    category,
+    category: ctx.category,
     count: tools.length,
     tools: tools.map((t) => ({
       name: t.name,
@@ -83,12 +104,8 @@ const handleList = async (category: string): Promise<unknown> => {
 // call 操作：调用某品类的某个 MCP 工具
 // ============================================================================
 
-const handleCall = async (
-  category: string,
-  method: string,
-  args: Record<string, unknown>,
-): Promise<unknown> => {
-  const ctx = { category, method, args };
+const handleCall = async (ctx: CallContext): Promise<unknown> => {
+  const { category, method, args, requesterUserId, accountId } = ctx;
   const callStart = performance.now();
 
   console.log(`[mcp] handleCall ${category}/${method} 入参: ${JSON.stringify(args)}`);
@@ -96,6 +113,7 @@ const handleCall = async (
   // 1. 收集拦截器的 beforeCall 配置（如超时时间、替换 args）
   const { options, args: resolvedArgs } = await resolveBeforeCall(ctx);
   const finalArgs = resolvedArgs ?? args;
+  const requestOptions = { ...options, ...(requesterUserId ? { requesterUserId } : {}), ...(accountId ? { accountId } : {}) };
 
   if (resolvedArgs) {
     console.log(
@@ -111,7 +129,7 @@ const handleCall = async (
   const result = await sendJsonRpc(category, "tools/call", {
     name: method,
     arguments: finalArgs,
-  }, options);
+  }, requestOptions);
 
   const rpcDone = performance.now();
   const rpcMs = (rpcDone - callStart).toFixed(1);
@@ -171,7 +189,12 @@ const parseArgs = (args: string | Record<string, unknown> | undefined): Record<s
 /**
  * 创建 wecom_mcp Agent Tool 定义
  */
-export function createWeComMcpTool() {
+export function createWeComMcpTool(options: CreateWeComMcpToolOptions = {}) {
+  const requesterUserId = normalizeOptionalString(options.requesterUserId);
+  const accountId = normalizeOptionalString(options.accountId);
+  const chatId = normalizeOptionalString(options.chatId);
+  const chatType = options.chatType;
+
   return {
     name: "wecom_mcp",
     label: "企业微信 MCP 工具",
@@ -221,17 +244,26 @@ export function createWeComMcpTool() {
       );
       try {
         let result: ReturnType<typeof textResult>;
+        const ctx: CallContext = {
+          category: p.category,
+          method: p.method ?? "",
+          args: {},
+          requesterUserId,
+          accountId,
+          chatId,
+          chatType,
+        };
         switch (p.action) {
           case "list":
-            result = textResult(await handleList(p.category));
+            result = textResult(await handleList(ctx));
             break;
           case "call": {
             if (!p.method) {
               result = textResult({ error: "action 为 call 时必须提供 method 参数" });
               break;
             }
-            const args = parseArgs(p.args);
-            result = textResult(await handleCall(p.category, p.method, args));
+            ctx.args = parseArgs(p.args);
+            result = textResult(await handleCall(ctx));
             break;
           }
           default:
@@ -247,7 +279,7 @@ export function createWeComMcpTool() {
         console.error(
           `[mcp] execute: action=${p.action}, category=${p.category}` +
           (p.method ? `, method=${p.method}` : "") +
-          ` → 异常: ${err instanceof Error ? err.message : String(err)}`,
+          ` → 异常: ${err instanceof Error ? err.message : JSON.stringify(err)}`,
         );
         return errorResult(err);
       }

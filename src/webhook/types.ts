@@ -4,7 +4,7 @@
  * 从 @mocrane/wecom monitor/types.ts 完整迁移，适配目标项目类型体系。
  */
 
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { WeComConfig, ResolvedWeComAccount } from "../utils.js";
 

@@ -10,9 +10,11 @@
  */
 
 import { bizErrorInterceptor } from "./biz-error.js";
+import { docAuthErrorInterceptor } from "./doc-auth-error.js";
 import { mediaInterceptor } from "./msg-media.js";
 import { smartpageCreateInterceptor } from "./smartpage-create.js";
 import { smartpageExportInterceptor } from "./smartpage-export.js";
+import { smartsheetUploadInterceptor } from "./smartsheet-upload.js";
 import type { CallContext, CallInterceptor, BeforeCallOptions } from "./types.js";
 import type { SendJsonRpcOptions } from "../transport.js";
 
@@ -24,9 +26,11 @@ export type { CallContext, CallInterceptor, BeforeCallOptions } from "./types.js
 
 const interceptors: CallInterceptor[] = [
   bizErrorInterceptor,         // 业务错误码检查（所有 call 生效）
+  docAuthErrorInterceptor,     // 文档授权错误拦截（category=doc, errcode=851013/851014/851008）
   mediaInterceptor,            // get_msg_media base64 拦截
   smartpageCreateInterceptor,  // smartpage_create 本地文件读取
   smartpageExportInterceptor,  // smartpage_get_export_result content → 本地文件
+  smartsheetUploadInterceptor, // smartsheet_add_records / update_records 本地文件上传
 ];
 
 // ============================================================================

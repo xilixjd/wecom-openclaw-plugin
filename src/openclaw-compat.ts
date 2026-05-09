@@ -624,7 +624,7 @@ const _sdkPolicyReady: Promise<{
 }> = (async () => {
   try {
     // 尝试从主 SDK 包导入
-    const sdk = await import("openclaw/plugin-sdk");
+    const sdk = await import("openclaw/plugin-sdk/channel-policy");
     if (typeof (sdk as any).buildAccountScopedDmSecurityPolicy === "function") {
       return { buildAccountScopedDmSecurityPolicy: (sdk as any).buildAccountScopedDmSecurityPolicy };
     }

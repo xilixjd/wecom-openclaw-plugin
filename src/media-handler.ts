@@ -14,6 +14,40 @@ import { withTimeout } from "./timeout.js";
 import type { ResolvedWeComAccount } from "./utils.js";
 
 // ============================================================================
+// 媒体超限错误
+// ============================================================================
+
+/**
+ * 附件超过 OpenClaw 配置的 `agents.defaults.mediaMaxMb` 上限时抛出。
+ *
+ * 本错误由插件层主动判定并抛出，不依赖 OpenClaw 核心层错误消息的字符串匹配，
+ * 上层（monitor）可通过 `instanceof MediaOversizeError` 精确识别并向用户提示。
+ */
+export class MediaOversizeError extends Error {
+  readonly kind: "image" | "file";
+  readonly filename?: string;
+  readonly sizeBytes: number;
+  readonly maxBytes: number;
+
+  constructor(params: {
+    kind: "image" | "file";
+    filename?: string;
+    sizeBytes: number;
+    maxBytes: number;
+  }) {
+    super(
+      `Media oversize: kind=${params.kind}, size=${params.sizeBytes}, max=${params.maxBytes}` +
+        (params.filename ? `, filename=${params.filename}` : ""),
+    );
+    this.name = "MediaOversizeError";
+    this.kind = params.kind;
+    this.filename = params.filename;
+    this.sizeBytes = params.sizeBytes;
+    this.maxBytes = params.maxBytes;
+  }
+}
+
+// ============================================================================
 // 图片格式检测辅助函数（基于 file-type 包）
 // ============================================================================
 
@@ -96,6 +130,17 @@ export async function downloadAndSaveImages(params: {
         }
       }
 
+      // 大小校验由插件层主动进行，超限抛出 MediaOversizeError，由 monitor 统一提示用户。
+      // 不再把 maxBytes 传给核心层 saveMediaBuffer，避免重复校验产生无结构化错误。
+      if (imageBuffer.length > maxBytes) {
+        throw new MediaOversizeError({
+          kind: "image",
+          filename: originalFilename,
+          sizeBytes: imageBuffer.length,
+          maxBytes,
+        });
+      }
+
       const saved = await core.channel.media.saveMediaBuffer(
         imageBuffer,
         imageContentType,
@@ -106,6 +151,10 @@ export async function downloadAndSaveImages(params: {
       mediaList.push({ path: saved.path, contentType: saved.contentType });
       runtime.log?.(`[wecom][plugin] Image saved: path=${saved.path}, contentType=${saved.contentType}`);
     } catch (err) {
+      // 媒体超限错误需要上抛给 monitor，用于向用户发送明确的提示文案。
+      if (err instanceof MediaOversizeError) {
+        throw err;
+      }
       runtime.error?.(`[wecom] Failed to download image: ${String(err)}`);
     }
   }
@@ -167,6 +216,17 @@ export async function downloadAndSaveFiles(params: {
         fileContentType = fetched.contentType ?? "application/octet-stream";
       }
 
+      // 大小校验由插件层主动进行，超限抛出 MediaOversizeError，由 monitor 统一提示用户。
+      // 不再把 maxBytes 传给核心层 saveMediaBuffer，避免重复校验产生无结构化错误。
+      if (fileBuffer.length > maxBytes) {
+        throw new MediaOversizeError({
+          kind: "file",
+          filename: originalFilename,
+          sizeBytes: fileBuffer.length,
+          maxBytes,
+        });
+      }
+
       const saved = await core.channel.media.saveMediaBuffer(
         fileBuffer,
         fileContentType,
@@ -177,6 +237,10 @@ export async function downloadAndSaveFiles(params: {
       mediaList.push({ path: saved.path, contentType: saved.contentType });
       runtime.log?.(`[wecom][plugin] File saved: path=${saved.path}, contentType=${saved.contentType}`);
     } catch (err) {
+      // 媒体超限错误需要上抛给 monitor，用于向用户发送明确的提示文案。
+      if (err instanceof MediaOversizeError) {
+        throw err;
+      }
       runtime.error?.(`[wecom] Failed to download file: ${String(err)}`);
     }
   }

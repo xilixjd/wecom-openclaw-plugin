@@ -16,6 +16,8 @@ export interface MessageBody {
   from: {
     corpid?: string;
     userid: string;
+    /** 会话 ID（权限变更事件回调中携带） */
+    chat_id?: string;
   };
   response_url?: string;
   msgtype: string;
@@ -40,12 +42,17 @@ export interface MessageBody {
     url?: string;
     aeskey?: string;
   };
+  video?: {
+    url?: string;
+    aeskey?: string;
+  };
   quote?: {
     msgtype: string;
     text?: { content: string };
     voice?: { content: string };
     image?: { url?: string; aeskey?: string };
     file?: { url?: string; aeskey?: string };
+    video?: { url?: string; aeskey?: string };
   };
   event?: {
     eventtype?: string;
@@ -61,6 +68,11 @@ export interface MessageBody {
           };
         }>;
       };
+    };
+    /** 权限变更事件回调（如文档授权） */
+    auth_change_event?: {
+      /** 当前权限列表：1-新建和编辑文档；2-获取成员文档内容 */
+      auth_list?: number[];
     };
   };
 }
@@ -128,6 +140,81 @@ function buildTemplateCardEventText(body: MessageBody): string | undefined {
     .join("\n");
 }
 
+// ============================================================================
+// 权限类型映射
+// ============================================================================
+
+/** 权限类型枚举 */
+enum AuthType {
+  /** 新建和编辑文档 */
+  CREATE_AND_EDIT_DOC = 1,
+  /** 获取成员文档内容 */
+  GET_DOC_CONTENT = 2,
+}
+
+/** 权限类型值 → 中文描述 */
+const AUTH_TYPE_MAP: Record<number, string> = {
+  [AuthType.CREATE_AND_EDIT_DOC]: "新建和编辑文档",
+  [AuthType.GET_DOC_CONTENT]: "获取成员文档内容",
+};
+
+/**
+ * 将权限变更事件回调格式化为可继续路由给大模型的文本。
+ *
+ * 当管理员在授权页面变更权限后，系统收到 auth_change_event 回调，
+ * 根据 auth_list 生成对应的提示文本，引导 Agent 继续操作。
+ */
+function buildAuthChangeEventText(body: MessageBody): string | undefined {
+  console.log("authChangeEventCheck", body.event);
+  const authChangeEvent = body.event?.auth_change_event;
+  if (
+    body.msgtype !== "event" ||
+    body.event?.eventtype !== "auth_change_event" ||
+    !authChangeEvent
+  ) {
+    return undefined;
+  }
+
+  const authList = authChangeEvent.auth_list ?? [];
+  const authDescriptions = authList
+    .map((code) => AUTH_TYPE_MAP[code] || `未知权限(${code})`)
+    .join("、");
+
+  // 根据权限列表内容生成不同的操作指引
+  const hasDocContentAuth = authList.includes(AuthType.GET_DOC_CONTENT);
+  let actionHint: string;
+  if (hasDocContentAuth) {
+    // 包含"获取成员文档内容"权限，引导 Agent 继续文档操作
+    actionHint = "用户已授予文档内容读取权限，请继续之前的文档操作。";
+  } else if (authList.length > 0) {
+    // 有其他权限但没有文档内容读取权限
+    actionHint = "当前授权不包含文档内容读取权限，无法继续文档操作。请引导用户授予「获取成员文档内容」权限，该权限需要向管理员申请，管理员审批通过后可使用。";
+  } else {
+    // 权限列表为空
+    actionHint = "当前无任何文档权限，无法继续文档操作。请引导用户完成文档授权。";
+  }
+
+  const senderUserId = body.from?.userid || "";
+  const senderCorpId = body.from?.corpid || "";
+  const chatId = body.from?.chat_id || body.chatid || senderUserId;
+
+  return [
+    "[企业微信文档权限变更回调]",
+    `event_type(事件类型): auth_change_event`,
+    `auth_list(当前权限列表): [${authList.join(", ")}] (${authDescriptions || "无"})`,
+    body.msgid ? `msgid(消息 id): ${body.msgid}` : undefined,
+    body.aibotid ? `aibotid(机器人 id): ${body.aibotid}` : undefined,
+    body.chattype ? `chat_type(会话类型): ${body.chattype}` : undefined,
+    chatId ? `chat_id(会话 id): ${chatId}` : undefined,
+    senderCorpId ? `from.corpid(企业 id): ${senderCorpId}` : undefined,
+    senderUserId ? `from.userid(发送人 id): ${senderUserId}` : undefined,
+    "",
+    `[操作指引] ${actionHint}`,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
 /**
  * 解析消息内容（支持单条消息、图文混排、事件回调和引用消息）
  * @returns 提取的文本数组、图片URL数组和引用消息内容
@@ -140,9 +227,15 @@ export function parseMessageContent(body: MessageBody): ParsedMessageContent {
   const fileAesKeys = new Map<string, string>();
   let quoteContent: string | undefined;
 
-  // 处理模板卡片事件回调
-  
   if (body.msgtype === "event") {
+    // 处理权限变更事件回调（如文档授权）
+    const authChangeText = buildAuthChangeEventText(body);
+    if (authChangeText) {
+      textParts.push(authChangeText);
+      return { textParts, imageUrls, imageAesKeys, fileUrls, fileAesKeys, quoteContent };
+    }
+
+    // 处理模板卡片事件回调
     const eventText = buildTemplateCardEventText(body);
     if (eventText) {
       textParts.push(eventText);
@@ -184,6 +277,13 @@ export function parseMessageContent(body: MessageBody): ParsedMessageContent {
         fileAesKeys.set(body.file.url, body.file.aeskey);
       }
     }
+    // 处理视频消息（沿用 file 下载/解密通路，作为文件附件透传）
+    if (body.msgtype === "video" && body.video?.url) {
+      fileUrls.push(body.video.url);
+      if (body.video.aeskey) {
+        fileAesKeys.set(body.video.url, body.video.aeskey);
+      }
+    }
   }
 
   // 处理引用消息
@@ -203,6 +303,12 @@ export function parseMessageContent(body: MessageBody): ParsedMessageContent {
       fileUrls.push(body.quote.file.url);
       if (body.quote.file.aeskey) {
         fileAesKeys.set(body.quote.file.url, body.quote.file.aeskey);
+      }
+    } else if (body.quote.msgtype === "video" && body.quote.video?.url) {
+      // 引用的视频消息：沿用文件下载通路
+      fileUrls.push(body.quote.video.url);
+      if (body.quote.video.aeskey) {
+        fileAesKeys.set(body.quote.video.url, body.quote.video.aeskey);
       }
     }
   }

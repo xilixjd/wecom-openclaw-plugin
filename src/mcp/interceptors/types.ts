@@ -19,6 +19,14 @@ export interface CallContext {
   method: string;
   /** 调用 MCP 方法的参数 */
   args: Record<string, unknown>;
+  /** 当前会话对应的账户 ID（由工具工厂透传，用于精确清理缓存等场景） */
+  accountId?: string;
+  /** 当前会话的 chatId（群组 ID 或用户 ID），用于 aibot_send_biz_msg 等命令 */
+  chatId?: string;
+  /** 当前会话的聊天类型：single（单聊）或 group（群聊） */
+  chatType?: "single" | "group";
+  /** 当前会话可信的企业微信 userid */
+  requesterUserId?: string;
 }
 
 /**
