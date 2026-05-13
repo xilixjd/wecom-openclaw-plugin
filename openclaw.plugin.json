@@ -6,6 +6,11 @@
   "skills": [
     "./skills"
   ],
+  "contracts": {
+    "tools": [
+      "wecom_mcp"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

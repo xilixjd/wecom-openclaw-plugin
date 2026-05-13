@@ -1,6 +1,6 @@
 {
   "name": "@wecom/wecom-openclaw-plugin-fork",
-  "version": "2026.4.11",
+  "version": "2026.4.12",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
